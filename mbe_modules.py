@@ -99,7 +99,7 @@ class MBELinear(nn.Module):
         x: (Batch, In)
         Returns: (Batch, Out)
         """
-        if self.mbe_id is None:
+        if self.mbe is None:
             return F.linear(x, self.weight, self.bias)
 
         # 1. Normalize input x to [-1, 1] for stable MBE encoding
