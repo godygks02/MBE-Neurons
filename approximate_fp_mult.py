@@ -3,9 +3,11 @@ import torch.nn as nn
 
 class MBEMultiplier(nn.Module):
     """
-    Optimized MBE-based FP Multiplier.
-    Avoids explicit (K, K) matrix construction to save memory and time.
-    y = sum_i(s1_i * d1_i) * sum_j(s2_j * d2_j)
+    MBE-based FP Multiplier using Spike-Intensity Interaction. (True Hardware Simulation)
+    Approximates x1 * x2 = sum_i,j (s1_i * s2_j * d1_i * d2_j)
+    
+    This version explicitly constructs the (K, K) interaction matrices for every element 
+    in the batch, exactly as it would happen in a neuromorphic crossbar array.
     """
     def __init__(self, mbe_id_model=None, num_basis=4, timesteps=16, dt=1.0, alpha=1.0):
         super(MBEMultiplier, self).__init__()
@@ -17,20 +19,46 @@ class MBEMultiplier(nn.Module):
 
     def forward(self, x1, x2):
         """
-        Efficiently approximates x1 * x2 using the distributive property.
-        Instead of a (K, K) interaction matrix, we sum the decoded contributions 
-        of each operand independently and then multiply.
+        x1, x2: Tensors of same shape (Batch, ...)
+        Returns: Approximated product tensor
         """
-        # 1. Encode both operands and get decoded values directly
-        # MBE forward returns (decoded_val, s_seq, d_seq_scaled)
-        # We only need the decoded_val for the multiplication logic, 
-        # but we use the spiking framework to maintain SNN properties.
+        # 1. Encode both operands into spike sequences: (T, N, Batch, Features)
+        _, s1, d1 = self.mbe_id(x1, return_sequences=True)
+        _, s2, d2 = self.mbe_id(x2, return_sequences=True)
         
-        # decoded1 = sum_t,n (s1_tn * d1_tn)
-        decoded1, _, _ = self.mbe_id(x1, return_sequences=True)
-        # decoded2 = sum_t,n (s2_tn * d2_tn)
-        decoded2, _, _ = self.mbe_id(x2, return_sequences=True)
+        orig_shape = x1.shape
+        T, N = s1.shape[0], s1.shape[1]
+        K = T * N
         
-        # The theoretical MBE product is exactly the product of the decoded values
-        # because (sum s1 d1) * (sum s2 d2) = sum_i,j (s1_i s2_j d1_i d2_j)
-        return decoded1 * decoded2
+        # Flatten time and basis: (K, Total_Elements)
+        # s1_flat, s2_flat: (K, B*F)
+        s1_flat = s1.view(K, -1)
+        s2_flat = s2.view(K, -1)
+        d1_flat = d1.view(K, -1)
+        d2_flat = d2.view(K, -1)
+        
+        total_elements = s1_flat.shape[1]
+        
+        # 2. Hardware-style Matrix Interaction (The "Standard Way")
+        # We need to compute S_ij = s1_i * s2_j and D_ij = d1_i * d2_j
+        
+        # Reshape for batch-wise outer product
+        # (Total_Elements, K, 1) and (Total_Elements, 1, K)
+        s1_b = s1_flat.t().unsqueeze(2) 
+        s2_b = s2_flat.t().unsqueeze(1)
+        
+        d1_b = d1_flat.t().unsqueeze(2)
+        d2_b = d2_flat.t().unsqueeze(1)
+        
+        # Interaction Matrices (Batch, K, K)
+        # This is where the GPU shines! 
+        # Construction of these large tensors is fast on VRAM.
+        S = torch.matmul(s1_b, s2_b) # Spike interactions
+        D = torch.matmul(d1_b, d2_b) # Intensity interactions
+        
+        # 3. Final Sum of Interactions: y = sum(S * D)
+        # Element-wise product and then sum over the (K, K) interaction grid
+        approx_product_flat = torch.sum(S * D, dim=(1, 2))
+        
+        # Reshape back to (Batch, Features)
+        return approx_product_flat.view(orig_shape)
