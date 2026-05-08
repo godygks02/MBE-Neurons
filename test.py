@@ -213,13 +213,17 @@ def main():
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.axis('off')
     
+    # Pure Inference Gain (excluding pre-compute)
+    pure_gain = (1 - e_snn_inference / total_ann_energy) * 100
+
     table_data = [
-        ["Metric", "ANN (Baseline)", "SNN (Proposed)", "Efficiency Gain (CDCER)"],
+        ["Metric", "ANN (Baseline)", f"SNN (T={T}, N={N})", "Efficiency Gain (CDCER)"],
         ["Accuracy", f"{ann_acc:.2f}%", f"{snn_acc:.2f}%", f"{ann_acc - snn_acc:.2f}% (Drop)"],
         ["Linear Energy", f"{e_ann_linear/1e6:.2f} uJ", f"Included in SOPs", "-"],
         ["Non-Linear Energy", f"{(e_ann_ln+e_ann_gelu+e_ann_softmax)/1e6:.2f} uJ", f"Included in SOPs", "-"],
-        ["Pre-compute Cost", "-", f"{e_snn_precompute/1e6:.2f} uJ (Total)", "Amortized over samples"],
-        ["Total Dynamic Energy", f"{total_ann_energy/1e6:.2f} uJ", f"{total_snn_energy/1e6:.2f} uJ", f"{cdcer:.2f}%"]
+        ["Pre-compute Cost", "-", f"{e_snn_precompute/1e6:.2f} uJ (Total)", "One-time Setup"],
+        ["Total Dynamic Energy", f"{total_ann_energy/1e6:.2f} uJ", f"{total_snn_energy/1e6:.2f} uJ", f"{cdcer:.2f}%"],
+        ["Pure Inference Gain", "-", "-", f"{pure_gain:.2f}% (Excl. Setup)"]
     ]
     
     table = ax.table(cellText=table_data, loc='center', cellLoc='center', colWidths=[0.2, 0.25, 0.3, 0.25])
