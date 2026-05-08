@@ -1,0 +1,928 @@
+Training-Free ANN-to-SNN Conversion for High-Performance
+Spiking Transformers
+Jingya Wang1*, Xin Deng 1*, Wenjie Wei1, Dehao Zhang 1, Shuai Wang1, Qian Sun 1,
+Jieyuan Zhang1, Hanwen Liu 1, Ning Xie 1, Malu Zhang 1,2 †
+1University of Electronic Science and Technology of China,
+2Shenzhen Loop Area Institute
+jiangyawang@std.uestc.edu.cn, dengbujiu@std.uestc.edu.cn, maluzhang@uestc.edu.cn
+Abstract
+Leveraging the event-driven paradigm, Spiking Neural Net-
+works (SNNs) offer a promising approach for energy-efficient
+Transformer architectures. While ANN-to-SNN conversion
+avoids the high training cost of directly trained Spiking
+Transformers, existing approaches still struggle to handle the
+nonlinear operations within Transformer blocks, and often
+require additional fine-tuning of pretrained ANNs. To ad-
+dress these limitations, we propose a training-free and high-
+performance ANN-to-SNN conversion framework tailored
+for Transformer architectures. Specifically, we introduce a
+Multi-basis Exponential Decay (MBE) neuron that combines
+exponential decay with a multi-basis encoding strategy to ef-
+fectively approximate nonlinear operations, eliminating the
+need for weight modifications in pretrained ANNs. Exten-
+sive experiments across diverse tasks (CV , NLU, NLG) and
+mainstream Transformer architectures (ViT, RoBERTa, GPT-
+2) demonstrate that our method achieves near-lossless conver-
+sion accuracy with significantly lower latency. This provides
+a promising pathway for the efficient and scalable deploy-
+ment of Spiking Transformers in real-world applications.
+Introduction
+Spiking Neural Networks (SNNs) have garnered atten-
+tion due to their sparse and spike-driven computing
+paradigm (Maass 1997). Unlike Artificial Neural Networks
+(ANNs), SNNs employ sparse binary spikes as informa-
+tion carriers, thereby offering superior energy efficiency for
+resource-limited devices (Zhang et al. 2025b; Liang et al.
+2025; Wei et al. 2025). Recently, several studies (Wang et al.
+2025b; Xiao et al. 2025) have integrated high-performance
+Transformer architectures (Vaswani et al. 2017) into SNNs
+to jointly exploit their expressive capacity and inherent en-
+ergy efficiency. These methods substantially improve the
+performance of SNNs on complex tasks (Wang et al.
+2025a,c; Shan et al. 2025; Cai et al. 2025).
+To obtain Transformer-based SNNs, two mainstream ap-
+proaches exist: Direct Training (DT) (Wu et al. 2018) and
+ANN-to-SNN conversion (A2S) (Diehl et al. 2015). DT
+employs surrogate gradients (Neftci, Mostafa, and Zenke
+*These authors contributed equally.
+† Corresponding author.
+Copyright © 2026, Association for the Advancement of Artificial
+Intelligence (www.aaai.org). All rights reserved.
+2019; Wei et al. 2024; Sun et al. 2025; Zhang et al.
+2025a) and backpropagation through time (BPTT) (Hochre-
+iter and Schmidhuber 1997), making the training of large-
+scale SNNs feasible. However, it suffers from inaccurate
+gradient approximation and T × training overhead. In con-
+trast, A2S establishes an equivalence between the firing rate
+of Integrate-and-Fire neurons and ReLU functions (Bu et al.
+2023), enabling SNNs to inherit the pretrained weights of
+ANNs with nearly lossless conversion in CNNs. However,
+complex nonlinear operations in Transformers pose substan-
+tial challenges for converting them into SNN architectures.
+To address this issue, prior research (Wang et al. 2023)
+examines nonlinear components in Transformers. According
+to their computational forms, these nonlinear operations can
+be categorized into single-variable (e.g., GELU, Tanh) and
+multi-variable operations (e.g., variable–variable floating-
+point multiplications, LayerNorm). SpikeZIP-TF (You et al.
+2024) replaces single-variable functions and fine-tunes pre-
+trained ANN weights, incurring additional training over-
+head. STA (Jiang et al. 2024) approximates all nonlinear
+functions using group operators, which increases inference
+latency. Thus, there is a need for a conversion method that
+balances training cost with inference efficiency.
+Inspired by the temporal coding mechanisms observed
+in biological neurons, Few-spikes (FS) neurons (St ¨ockl and
+Maass 2021) are proposed. It leverages spike timing and
+patterns to represent neuronal activation states. This char-
+acteristic enables it to achieve near-lossless performance in
+small-scale CNN-based conversion (Mao et al. 2025). How-
+ever, as model scale increases, FS-based conversion meth-
+ods exhibit substantial performance gaps. Moreover, their
+single-input fitting design limits their ability to handle the
+multi-variable operations in Transformer architectures.
+In this paper, we first theoretically and empirically an-
+alyze the key challenges associated with FS–based con-
+version, particularly in large-scale network architectures.
+To overcome these challenges, we propose a training-free
+A2S conversion framework tailored for Transformer archi-
+tectures. Specifically, we introduce a novel Multi-basis Ex-
+ponential Decay (MBE) neuron that effectively approxi-
+mates diverse nonlinear operations, enabling our conversion
+framework to achieve both low inference latency and near-
+lossless accuracy. The main contributions are as follows:
+The Fortieth AAAI Conference on Artificial Intelligence (AAAI-26)
+2128
+• We systematically analyze the incompatibility between
+FS neurons and Transformer architectures, focusing on
+excessive dependence on initialization (EDI) and global
+suboptimality (GSO) problems, which hinder conver-
+gence and degrade conversion performance.
+• We introduce a MBE neuron with exponential decay
+strategy and multi-basis encoding method. The decay
+strategy enables multi-resolution representations, while
+multi-basis encoding enhances the near-lossless approxi-
+mation of diverse nonlinear operations.
+• We propose an A2S framework based on MBE neu-
+rons that efficiently approximates various nonlinear op-
+erations in Transformer architectures, including variable-
+variable FP multiplications, GELU, Softmax, and Layer-
+Norm. It achieves near-lossless conversion with fast in-
+ference and require no training on source ANNs.
+• Extensive experiments on diverse tasks (CV , NLU, NLG)
+and architectures (ViT, RoBERTa, GPT-2) demonstrate
+that our method achieves near-lossless conversion with
+reduced latency, yielding competitive results among ex-
+isting Transformer-based A2S methods.
+Related Work
+Existing conversion paradigms can be categorized into two
+types based on whether extra training on the source ANNs
+is required: training-dependent and training-free.
+Training-dependent conversion typically requires addi-
+tional training of ANN based on theoretical ANN-SNN
+equivalence. Clip-Floor-Shift activations (Bu et al. 2023)
+replace ReLU to better match spiking neuron behavior.
+A two-phase training (Ding et al. 2021) first optimizes
+ANN weights, then adjusts neuron thresholds, while acti-
+vation range constraints and membrane potential initializa-
+tion (Bu et al. 2022) help further reduce conversion error.
+(Wang et al. 2022b) introduces a two-stage approach to han-
+dle quantization, pruning, and residual errors. (Jiang et al.
+2023) proposes a unified framework treating spike-rate map-
+ping as a differentiable problem. For Transformer architec-
+tures, a QANN is integrated with the spatiotemporal prop-
+erties of spiking neurons for lossless conversion (You et al.
+2024). While effective, these methods introduce computa-
+tional overhead through additional training of source ANNs.
+Training-free conversion directly transforms pre-trained
+ANNs via structure and parameter reuse without fine-tuning.
+Early works align SNN thresholds with ANN activations
+via threshold balancing (Diehl et al. 2015; Rueckauer et al.
+2017), but longer timesteps are required. Signed spiking
+neurons (Wang et al. 2022a) support dynamic vision data.
+In (Jiang et al. 2024), training-free Transformer conversion
+is achieved using universal group operators and spatial recti-
+fication self-attention. SpikedAttention (Hwang et al. 2024)
+enables spike-driven Transformer A2S via trace-based ma-
+trix multiplication and winner-take-all spike shifting, yet re-
+tains non-spiking LayerNorm. ECMT (Huang et al. 2024)
+reduces latency in Transformer SNNs, yet still relies on
+floating-point operations. While retraining is avoided, these
+methods often require long timesteps or retain non-spiking
+components, limiting SNNs’ energy efficiency.
+Preliminary & Problem Analysis
+Preliminary
+Inspired by authentic electrophysiological characteristics of
+human brain neurons, FS neuron is proposed to address the
+inherent trade-off between spike count and accuracy in A2S
+(St¨ockl and Maass 2021). By introducing learnable param-
+eters including neuron threshold, membrane potential reset
+value, and spike intensity, FS neuron approximates ANN ac-
+tivation functions with very few spikes. Mathematically, the
+membrane potential of FS neuron can be computed as:
+u[t + 1] = u[t] − r[t] · s[t], (1)
+where t ∈ [0, T − 1] denotes timesteps, u[t] represents the
+membrane potential, s[t] ∈ {0, 1} is the binary spike, and
+r[t] is the learned reset value. The membrane potential has
+no decay, and its initial value is typically set to the input
+from the previous layer, i.e., u[0] = x. When the membrane
+potential exceeds a learned threshold, a spike is generated,
+which is described as follows:
+s[t] = H
+
+x −
+Xt−1
+t′ =0
+r[t
+′
+] · s[t
+′
+]
+
+− Vth[t]
+
+, (2)
+where H(·) is the Heaviside step function and Vth[t] is the
+learned firing threshold. After each spike emission, the reset
+mechanism is invoked to update the membrane potential, as
+described in Eq.(1). Noteworthy, the spike s[t] emitted by
+FS neuron at time t is amplified by learned spike intensity
+d[t]. After T timesteps, the neuron integrates the weighted
+spike train and forwards it to the next layer:
+ˆf (x) =
+XT −1
+t=0
+d[t]s[t] ≈ f (x), (3)
+where ˆf (x) is the approximation value produced by FS neu-
+ron and f (x) is the output of activation function in ANNs.
+Problem Analysis
+We conduct a systematic analysis of FS neurons to under-
+stand their limitations in Transformer-based A2S tasks.
+Figure 1: Loss landscape of FS neurons in approximating the
+nonlinear activation function(i.e., ReLU). The 3D landscape
+of LBinary and LRandom from two different initialization.
+Approximation Error Analysis To qualitatively analyze
+how the FS neuron design impacts performance, follow-
+ing (Jiang et al. 2024), we consider errors from three
+sources: insufficient sampling, limited parameterization, and
+spiking quantization. This yields the following error bound:
+2129
+Theorem 1 (FS Neuron Error Bound). Let f : [a, b] →
+R be a target activation function, and let ˆf (M )
+T (x) denote
+the output of an FS neuron with T timesteps trained on M
+samples. Then the total approximation error satisfies:
+ε ≤ O
+ r
+T log T log M
+M| {z }
+Empirical Gap
++ Lf |y|max
+T| {z }
+Parametric Gap
++ ∥d∥1
+T| {z }
+Quantization Gap
+!
+,
+where ε = E[|f (x)− ˆf (M )
+T (x)|], Lf is the Lipschitz constant
+of f, |y|max the maximum value of f (x), and ∥d∥1 is the L1-
+norm of spike intensities. Proof in Appendix A.
+Excessive Dependence on Initialization From Theo-
+rem 1, the quantization gap ∥d∥1
+T depends on spike intensi-
+ties d[t], which are determined through optimization from
+initialization. Poor initialization may produce suboptimal
+d[t] that increase ∥d∥1, thereby enlarging the approxima-
+tion error. We conduct experiments to validate this: random
+initialization yields MSE random = 1.5 × 10−3, while bi-
+nary initialization (V th[t] = r[t] = d[t] = 2 T −t) achieves
+MSEbinary = 9.4×10−5, representing a 93.29% performance
+degradation under random initialization. As shown in Fig. 1,
+binary initialization results in a smoother and more stable
+optimization landscape, while random initialization leads to
+multiple local minima. This further corroborates the sensi-
+tivity of FS neurons to initialization quality.
+(c) Τ1 𝑥(a) GELU (d) Τ1 𝑥(b) 𝑒𝑥
+0 10 -10 0 5 0.1 5 0.1 30-10
+Ground Truth
+FS Neuron
+Ground Truth
+FS Neuron
+Ground Truth
+FS Neuron
+Ground Truth
+FS Neuron
+Figure 2: Critical interval approximation failure of nonlinear
+operations in Transformer using FS neurons.
+Global Suboptimality GSO stems from the parametric
+gap term Lf |y|max
+T in Theorem 1, revealing FS neurons’
+limitations when approximating functions with non-uniform
+complexity. Transformer nonlinearity inputs concentrate
+near zero (Statistical analysis in Appendix C), where activa-
+tion functions such as GELU and SiLU have high curvature
+and large local Lipschitz constantsLlocal
+f ≫ L f . This creates
+an amplified local gap εlocal
+param = O(Llocal
+f |y|local
+max /T ), which
+dominates the approximation error and highlights the inade-
+quacy of uniform time allocation. Experimental results sup-
+port this analysis: as shown in Fig. 2, although the overall ap-
+proximation error is small, the fitting degrades significantly
+in the near-zero region where outputs vary most rapidly. This
+region is crucial for Transformer performance, and the poor
+local approximation dominates overall behavior (FS-based
+Transformer conversion results in Appendix D).
+Method
+In this section, we first propose the MBE neuron, which
+employs exponential decay parameter update strategy and
+multi-basis encoding method to map activation values at
+multiple resolutions. Based on the MBE neuron, we fur-
+ther design an A2S conversion framework to overcome key
+challenges for Transformer architectures, achieving near-
+lossless conversion that is training-free and low-latency.
+Multi-Basis Exponential Decay Neuron
+To address the limitations of FS neurons, we propose a
+novel MBE neuron with an exponential decay parame-
+ter update strategy and multi-basis encoding scheme. Un-
+like FS neurons requiring learning multiple parameters
+(d[t], r[t], Vth[t]) per timestep, MBE neurons only learn de-
+cay rates and discrete timesteps, reducing parameter over-
+head and gradient instability (Details in Appendix E).
+Figure 3: FS neuron and MBE neuron encoding methods.
+The exponential decay mechanism enables progressive
+refinement from coarse to fine resolution, allowing adap-
+tive approximation of functions with varying granularity and
+rapid focus on limited value ranges over shorter timesteps,
+as illustrated in Fig. 3. The parameter update is defined as:
+P ara(τn, t) = α · exp
+
+− t∆t
+τn
+
+, (4)
+where P ara(τn, t) represents the parameter value at time
+t, α is a hyperparameter typically set to the target func-
+tion’s maximum value, ∆t is the discrete timestep, and
+τn ∈ {τ dn , τrn , τVthn } are the corresponding decay rates.
+To further enhance the representational capacity for
+approximating diverse nonlinear functions, we introduce
+multi-basis encoding as the second core feature. As shown
+in Fig.4, each MBE neuron comprises n basis components
+contributing distinct functional components to the overall re-
+sponse. The dynamics of the n-th basis are defined as:
+un[t + 1] = un[t] − sn[t] · rn[t], (5)
+sn[t] = H
+ 
+un[t] − Vthn[t]
+
+, (6)
+on[t + 1] = on[t] + sn[t] · dn[t], (7)
+where un[t] is the membrane potential of basis n at time
+t, on[t] is the accumulated output, dn[t] denotes the spike
+intensity, rn[t] is the reset value, Vthn[t] is the firing thresh-
+old, and H(·) is the Heaviside step function. When un[t] ≥
+Vthn[t], the neuron fires and emits a spike with intensity
+dn[t] while reducing the membrane potential by rn[t].
+2130
+Figure 4: Multi-basis exponential decay neuron.
+Finally, all basis outputs are weighted by a w to form
+ˆf (x), passed to the next layer to approximate f (x):
+ˆf (x) =
+XN
+n=1
+w(n) · o(n)(T ) ≈ f (x). (8)
+Approximation Error Analysis Following the same ana-
+lytical framework in Theorem 1, we derive error bounds for
+MBE neurons, accounting for the representational capacity:
+Theorem 2 (MBE Neuron Error Bounds). For a target ac-
+tivation function f : [a, b] → R and MBE neuron output
+ˆf (M )
+N,T (x) with N basis components, T timesteps trained on
+M samples, the total approximation error satisfies:
+ε∗ ≤ O
+ r
+N log(N ) log M
+M| {z }
+Empirical Gap
++ Lf |y|max
+N T| {z }
+Parametric Gap
++ ∥w∥1|α|τmax
+T ∆t| {z }
+Quantization Gap
+!
+,
+where ε∗ = E[|f (x) − ˆf (M )
+N,T (x)|], Lf is the Lipschitz con-
+stant of f, |y|max is the maximum absolute value of the tar-
+get function, ∥w∥1 is the L1 norm of basis weights, |α| is the
+positive scaling parameter, τmax = max n{τdn , τrn , τVthn }
+is the maximum time constant, and ∆t is the discrete
+timestep. The proof is provided in Appendix B.
+The theoretical analysis shows MBE advantages and
+guides our conversion framework through three key insights:
+Basis component design: The Parametric GapO(1/N T)
+outperforms FS neurons’ O(Lf |y|max/T ) by enabling
+multi-basis encoding to adaptively focus on high-curvature
+regions, solving the GSO problem without extra timesteps.
+Initialization stability: The Quantization Gap
+∥w∥1|α|τmax
+T ∆t mitigates the EDI problem through controlled
+scaling via |α| and time constant effects via τmax/∆t,
+enabling initialization-stability parameter updates.
+Hyperparameter determination: The 1/N T scaling re-
+veals a principled trade-off: increasing basis components N
+can effectively compensate for limited timesteps T , thereby
+achieving a balance between accuracy and low latency.
+Conversion Framework
+Based on MBE neurons, we propose a framework for
+Transformer-to-SNN conversion. As shown in Fig. 5, by de-
+composing non-spiking components (nonlinear activations,
+FP multiplication, Softmax, LayerNorm) into basic func-
+tions and designing corresponding MBE neurons for equiva-
+lent approximation, we enable spiking-based representation.
+Approximation of Nonlinear Activation Functions To
+enable accurate and efficient spike-based approximation of
+nonlinear activation functions such as GELU and Tanh in
+Transformers, we employ MBE neurons with N = 4 basis
+components (in Eq.(8)). Since LayerNorm compresses acti-
+vations into a narrow range, we constrain the GELU input
+domain to (−120, 10) to enhance both approximation accu-
+racy and training stability. Within this interval, we uniformly
+sample M = 10,000 points from the target function f (x)
+and compute the spike-based output ˆf (x) over T timesteps.
+Approximation of Floating-Point Multiplication The
+FP multiplication operands x1 and x2 are transformed
+through approximate identity mapping by the MBE neuron
+M BEId, yielding the spike-train representations:
+x ≈ M BEId (x) =
+T −1X
+t=0
+d[t]s[t], x ∈ {x 1, x2}. (9)
+Then, the multiplication of x1 and x2 is expressed as:
+x1 · x2 ≈
+T −1X
+i=0
+T −1X
+j=0
+d[i]d′[j] · s[i]s′[j]. (10)
+We represent the spike sequences of two MBE neurons as
+vectors s = {s[t]}T −1
+t=0 and s′ = {s′[t]}T −1
+t=0 respectively, and
+denote their corresponding intensity sequences as vectors
+d = {d[t]}T −1
+t=0 and d′ = {d′[t]}T −1
+t=0 . Based on these tem-
+poral vectors, we construct the intensity matrix D ∈ RT ×T
+and the spike matrix S ∈ {0, 1}T ×T as follows:
+D = d⊤d′, S = s⊤s′. (11)
+To achieve multiplication in the form of spikes, we em-
+ploy the Hadamard product followed by summation. Con-
+sequently, Eq.(10) can be expressed as:
+x1 · x2 ≈
+T −1X
+i=0
+T −1X
+j=0
+Dij · Sij =
+T −1X
+i=0
+T −1X
+j=0
+(D ⊙ S)ij, (12)
+where Dij = d[i]d′[j] and Sij = s[i]s′[j]. The intensity ma-
+trix D can be precomputed and shared across the entire net-
+work. With the binary matrix S, the entire FP multiplication
+approximation process maintains its spike-driven character-
+istics (Details in Appendix. F.1). By replacing FP multipli-
+cations in self-attention with our spike-driven operations, we
+enable fully spike-based attention matrix computation.
+Approximation of Softmax The Softmax(xi) = exi
+P
+j exj ,
+where i ,j denote the indices of elements in the sequence.
+Since softmax depends on all inputs, it cannot be directly im-
+plemented by a single MBE neuron. As shown in Fig. 5(b),
+we decompose the softmax computation into three compo-
+nents: exponential (ex), reciprocal (1/x), and FP multiplica-
+tion, each approximated by MBE neurons. For the term exi,
+we apply the change-of-base formula to decompose it into
+integer and decimal components as:
+exi = 2 xi·log2 e = 2 ⌊xi·log2 e⌋ · 2xi·log2 e−⌊xi·log2 e⌋, (13)
+2131
+Figure 5: Overview of our framework, which depicts the approximations of FP multiplication, Softmax, LayerNorm, and GELU.
+where ⌊·⌋ denotes the floor operation. The fractional part
+2xi·log2 e−⌊xi·log2 e⌋ is approximated by MBE neurons, and
+the integer exponent 2⌊xi·log2 e⌋ is achieved by hardware-
+efficient addition (Li and Gu 2023). For the reciprocal term
+1/ P
+j exj , we follow the IEEE 754 standard (Kahan 1996)
+to extract the exponentE and mantissa M through the corre-
+sponding bits of P
+j exj (i.e., P
+j exj = M · 2E). The recip-
+rocal 1/M is directly approximated using an MBE neuron,
+and the final result is obtained as 1/ P
+j exj = 2 −E/M.
+Combining the approximations of exi and 1/ P
+j exj , to-
+gether with our FP multiplication approximation scheme, we
+compute the final softmax output in a spike-based manner
+(Detailed Softmax algorithm table in Appendix F.2).
+Approximation of LayerNorm The LN(x i) = γ ·
+xi−µ
+√P(xi−µ)2/n+ϵ
++ β, where µ is the input mean, n is the
+number of elements, ϵ is a stability constant, and γ, β are
+learnable parameters. As shown in Fig. 5(c), we also de-
+compose LayerNorm into three spike-unfriendly operations:
+squaring (x2), reciprocal square root (1/√
+x), and FP multi-
+plication, each approximated by MBE neurons.
+For the squared term P(xi − µ)2, we adopt the proposed
+FP multiplication approximation with the intensity matrixD
+pre-scaled by 1/n to directly yield (xi − µ)2/n.
+For the inverse square root 1/
+pP(xi − µ)2/n + ϵ, we
+decompose the variance term into exponent E and man-
+tissa M. We adjust E and M based on E’s parity to en-
+sure −E/2 is an integer. The term 1/
+√
+M is approximated
+directly using MBE neuron, and the inverse square root is
+obtained by multiplying with 2−E/2, similar to the Softmax
+approximation. Finally, we multiply (xi − µ) with the ap-
+proximated 1/
+pP(xi − µ)2/n + ϵ using our FP multipli-
+cation approximation to obtain the LayerNorm output.
+Based on the aforementioned conversion of all non-
+spike-friendly components into equivalent spiking forms,
+we replace the corresponding modules to construct the
+Transformer-based SNN without modifying the original net-
+work parameters. Detailed pseudocode is in Appendix F.3.
+Experiments
+Experimental Setup
+We conduct experiments on a GPU (RTX 4090) environ-
+ment using the PyTorch framework, evaluating both pre-
+trained Vision Transformer (ViT) models, including ViT-
+Base-Patch16 (ViT-B/16) (Dosovitskiy et al. 2020) and ViT-
+Medium-Patch16-Reg4-Gap-256 (ViT-M/16) (Darcet et al.
+2023), as well as CNN models, including VGG16 (Si-
+monyan and Zisserman 2014) and ResNet34 (He et al. 2016)
+on the ImageNet dataset (Deng et al. 2009). To validate the
+generalizability of our method across different language do-
+mains and tasks, we adapt RoBERTa (Liu et al. 2019; Zhang
+et al. 2025c) for natural language understanding (NLU) tasks
+and employ GPT-2 (Radford et al. 2019) for natural lan-
+guage generation (NLG) task evaluation (Experimental and
+implementation details in Appendix G.1).
+Comparative Study
+Comparison on CV We evaluate the performance of our
+conversion framework by applying it to convert both ViT
+and CNN architectures. As shown in Tab. 1, ViT-B/16 and
+ViT-M/16 achieve conversion losses of 0.44% and 0.64%
+respectively—significantly lower than most existing meth-
+ods. The framework attains 85.31% accuracy for ViT and
+75.57% for CNN, outperforming other SNNs. While ECMT
+achieves competitive accuracy at shorter timesteps, it retains
+FP multiplication in its expectation compensation module.
+In contrast, our A2S framework maintains crucial spike-
+based property, thereby avoiding the high energy consump-
+tion typically associated FP multiplication during infer-
+ence. Furthermore, the training-free nature of our approach
+enables conversion with minimal computational overhead,
+eliminating the need for extensive retraining for source
+ANNs. Our method successfully accomplishes A2S conver-
+sion without requiring additional training of the original net-
+work, preserves the essential spiking properties, delivers su-
+perior performance at short timesteps, and achieves optimal
+results across all evaluation dimensions.
+2132
+Category Method Arch. SD TF Param[M] Timesteps ANN Acc.[%](∆)
+DT
+DSR(Meng et al. 2022) ResNet-18 ✔ - 12 50 - 67.74
+TET(Deng et al. 2022) SEW-ResNet-34 ✘ - 22 4 - 68.00
+AT-SNN(Yao et al. 2023b) ResNet-104 ✘ - 45 4 - 77.08
+Spikingformer(Zhou et al. 2023) -4-384-400E ✔ - 66 4 - 75.85
+SDTv1(Yao et al. 2023a) -8-768 ✔ - 66 4 - 77.07
+Spikeformer(Li, Lei, and Yang 2022) -7L/3×2×4 ✘ - 38 4 - 78.31
+QKFormer(Zhou et al. 2024) HST-10-768 ✔ - 65 4 - 84.22
+SDTv3(Yao et al. 2025) E-SpikeFormer ✔ - 173 8 - 85.10
+A2S
+QCFS (Bu et al. 2023) VGG-16 ✔ ✘ 138 64 74.92 72.85(-2.07)
+QFFS(Li, Ma, and Furber 2022) VGG-16 ✔ ✘ 138 8 73.08 73.10(+0.02)
+SNM(Wang et al. 2022a) ResNet-18 ✔ ✔ 12 64 73.18 71.50(-1.68)
+QCFS(Bu et al. 2023) ResNet-34 ✔ ✘ 22 64 74.23 72.35(-1.88)
+ECL(Liu et al. 2025) ResNet-34 ✔ ✘ 22 16 74.36 72.37(-1.99)
+AdaFire(Wang et al. 2025d) ResNet-34 ✔ ✔ 22 8 75.66 72.96(-2.70)
+Ours VGG16 ✔ ✔ 138 10 73.37 72.61 (-0.76)
+ResNet-34 ✔ ✔ 22 10 76.31 75.57(-0.74)
+ECMT(Huang et al. 2024) ViT-L/16 ✘ ✔ 307 12 84.88 84.71(-0.17)
+STA(Jiang et al. 2024) ViT-B/32 ✘ ✔ 88 256 83.60 82.79(-0.81)
+SpikeZIP-TF(You et al. 2024) SViT-L-32Level ✔ ✘ 304 64 85.41 83.82(-1.59)
+SpikedAttention(Hwang et al. 2024) Swin-T(BN) ✘ ✔ 28 48 79.30 77.20(-2.10)
+Ours ViT-B/16 ✔ ✔ 86 16 83.44 83.00(-0.44)
+ViT-M/16 ✔ ✔ 64 16 85.95 85.31(-0.64)
+Table 1: ImageNet performance comparison. Here, “SD” and “TF” represent Spike-Driven and Training-Free.
+Comparison on NLU To evaluate our method on NLU
+tasks, we conduct experiments on four benchmark datasets
+including SST-2, SST-5, MR, and Subj, following standard
+experimental settings from studies (You et al. 2024; Zhu
+et al. 2023). As shown in Table 2, our method achieves
+competitive performance across all datasets, outperform-
+ing existing methods on both RoBERTa-Base (125M) and
+RoBERTa-Large (355M). On SST-2, it attains 95.98% ac-
+curacy with T = 16, representing only 0.24% degrada-
+tion from the original ANN (96.22%), while outperform-
+ing SpikeZIP-TF (You et al. 2024) by 2.19% and reducing
+timesteps by 87.5%. Similarly, on MR with RoBERTa-Base,
+our method achieves 89.00% accuracy atT = 16, exceeding
+SpikeZIP-TF by 2.87% with 75% fewer timesteps.
+Category Model Param SST-2 SST-5 MR Subj T
+ANN Roberta 125 94.49 55.46 89.39 96.45 1
+355 96.22 59.37 91.36 97.50 1
+DT
+Spikeformer 110 81.55 42.02 79.38 91.80 4
+SpikeBERT 109 85.39 46.11 80.69 93.00 4
+SpikeGPT 45 80.39 37.69 69.23 88.45 50
+A2S
+SpikeZIP-TF 125 92.81 52.71 86.13 95.55 64
+355 93.79 56.51 89.28 96.70 128
+Ours 125 93.46 55.11 89.00 96.30 16
+355 95.98 58.31 90.96 97.45 16
+Table 2: NLU Performance Comparison
+Comparison on NLG To demonstrate the applicability
+of our method to NLG tasks, we evaluate its performance
+on WikiText-2 and WikiText-103. As shown in Tab. 3, our
+method achieves 22.69 perplexity on WikiText-2 with only
+T=16 timesteps, incurring merely 0.35% conversion loss
+compared to GPT-2. More significantly, on WikiText-103, it
+attains 23.41 perplexity—a substantial 41.1% improvement
+over directly-trained SpikeGPT (39.75) while using dramat-
+ically fewer timesteps (T=16 vs. T=1024), closely approach-
+ing the original GPT-2 performance and demonstrating su-
+perior efficiency for long-context generation.
+Category Model Param Wiki-2 (↓) Wiki-103 (↓) T
+ANN GPT-2 346 22.34 22.65 1
+DT SpikeGPT 216 18.01 39.75 1024
+A2S Ours 346 22.69
+(+0.35)
+23.41
+(+0.76) 16
+Table 3: NLG Performance Comparison. Both Wiki-2 and
+Wiki-103 use perplexity, ↓ indicates that lower is better.
+Ablation Study
+To compare MBE neurons and FS neurons, we evaluate their
+performance on key Transformer components. For GELU
+and FP multiplication, direct replacement is employed. As
+shown in Fig. 6(a), MBE neurons surpass FS neurons by
+13.20% in GELU conversion and achieve improvements in
+2133
+Figure 6: (a) Effect of MBE and FS neuron on components in Transformer, FP in (a) means floating multiplication. (b) Impact of
+MBE neurons with varying basis counts on energy consumption and accuracy when replacing GELU. MR represents marginal
+rate of change between accuracy and energy consumption. (c) Effect of the basis and decay. Loss comparison between models
+with (blue) and without (red) decay mechanism across basis numbers N=1,2,4,6,8. Y-axis shows log MSE loss (lower is better).
+Softmax and LayerNorm, demonstrating superior approxi-
+mation ability. In Fig. 6(b), increasing N leads to more ac-
+curate function approximations by MBE neurons. MBE neu-
+rons achieve high performance (e.g., less than 1% conver-
+sion loss when N ≥ 4) while offering significantly higher
+energy efficiency than ANNs. N=4 achieves the optimal
+accuracy-MR trade-off, representing the knee point where
+marginal gains plateau. The synergistic effect between ex-
+ponential decay and multi-basis encoding is demonstrated
+in Fig. 6(c). Incorporating decay consistently reduces MSE
+by 1–2 orders of magnitude across all basis numbers, with
+significant performance improvements. This reveals that ex-
+ponential decay creates a multiplicative synergy with multi-
+basis encoding, enabling exceptional approximation preci-
+sion unattainable through basis expansion alone.
+Dataset Model ANN T
+8 10 12 16
+ImageNet ViT-B/16 83.44 0.12 79.96 82.79 83.00
+ViT-M/16 85.95 1.17 21.99 84.43 85.31
+MR Roberta-B 89.39 50.17 71.30 88.55 89.00
+Roberta-L 91.36 49.66 68.62 90.52 90.96
+Wiki-103 (↓) GPT-2 22.65 41072 11992 33.56 23.41
+Table 4: Performance across various timesteps and models.
+Wiki-103 uses perplexity, ↓ indicates that lower is better.
+We evaluate ImageNet, MR, and Wiki-103 to analyze
+timestep requirements for A2S conversion across vision and
+language tasks. As shown in Tab. 4, our method achieves
+about 1% conversion loss for ViT, RoBERTa, and GPT-2
+at T=16, with near-optimal performance at T=12, demon-
+strating efficient progressive encoding. Notably, the accu-
+racy of ViT-M/16 drops to 21.99% at T=10, primarily due
+to its wider identity mapping range [0,62] causing amplified
+approximation errors under limited timesteps.
+Energy Estimation
+Unlike ANNs where energy depends on floating-point op-
+erations (FLOPs), the energy cost of SNNs is dominated
+by synaptic operations (SOPs). Following (Rathi and Roy
+2020), the energy ratio between SNNs and ANNs is:
+ESNN
+EANN
+= SOPs · EAC
+FLOPs · EMAC
+, (14)
+where EMAC = 4.6pJ, EAC = 0.9pJ. For ViT-M/16, we mea-
+sure the firing rates η of nonlinear operations across all lay-
+ers. Taking GELU as an example, the ANN implementation
+requires 70 FLOPs (Jiang et al. 2024), while the MBE neu-
+ron achieves η=38.22% under N=4 and T=16. The synaptic
+operations achieve energy consumption of 13.7% according
+to T ∗ N ∗ η ∗ EAC. Other operations yield greater energy
+savings owing to lower MBE firing rates. Complete results
+and detailed firing rates are provided in Appendix G.4.
+Conclusion
+This paper proposes an efficient Spiking Transformers con-
+version method that requires no additional training on the
+source ANNs. We first theoretically and experimentally
+identify two key challenges in using FS neurons to approxi-
+mate nonlinear operations: excessive dependence on initial-
+ization (EDI) and global suboptimality (GSO) problems. To
+address these issues, the MBE neuron employs an expo-
+nential decay strategy and a multi-basis encoding method
+to more accurately approximate the nonlinear operations
+in Transformer architecture. Based on the MBE neuron, a
+general ANN-to-SNN conversion framework is developed,
+which supports spiking nonlinear activation functions, spik-
+ing FP multiplications, spiking Softmax, and spiking Layer-
+Norm. Extensive experiments on various models (CNN, ViT,
+RoBERTa, GPT-2) across tasks (CV , NLU, NLG) confirm
+that the proposed method achieves near-lossless conversion.
+Therefore, our method provides a promising approach for
+the efficient and scalable deployment of Transformer-based
+SNNs in real-world applications.
+2134
+Acknowledgments
+This work is supported in part by the National Natural Sci-
+ence Foundation of China (62220106008 and 62576080), in
+part by the State Key Laboratory of Brain Cognition and
+Brain-inspired Intelligence Technology, Grant No. SKLBI-
+K2025010.
+References
+Bu, T.; Ding, J.; Yu, Z.; and Huang, T. 2022. Optimized po-
+tential initialization for low-latency spiking neural networks.
+In Proceedings of the AAAI conference on artificial intelli-
+gence, volume 36, 11–20.
+Bu, T.; Fang, W.; Ding, J.; Dai, P.; Yu, Z.; and Huang, T.
+2023. Optimal ANN-SNN conversion for high-accuracy and
+ultra-low-latency spiking neural networks. arXiv preprint
+arXiv:2303.04347.
+Cai, L.; Wang, H.; Ji, J.; ZhouMen, Y .; Ma, Y .; Sun, X.; Cao,
+L.; and Ji, R. 2025. Zooming In on Fakes: A Novel Dataset
+for Localized AI-Generated Image Detection with Forgery
+Amplification Approach. arXiv preprint arXiv:2504.11922.
+Darcet, T.; Oquab, M.; Mairal, J.; and Bojanowski, P.
+2023. Vision transformers need registers. arXiv preprint
+arXiv:2309.16588.
+Deng, J.; Dong, W.; Socher, R.; Li, L.-J.; Li, K.; and Fei-
+Fei, L. 2009. Imagenet: A large-scale hierarchical image
+database. In 2009 IEEE conference on computer vision and
+pattern recognition, 248–255. Ieee.
+Deng, S.; Li, Y .; Zhang, S.; and Gu, S. 2022. Temporal ef-
+ficient training of spiking neural network via gradient re-
+weighting. arXiv preprint arXiv:2202.11946.
+Diehl, P. U.; Neil, D.; Binas, J.; Cook, M.; Liu, S.-C.; and
+Pfeiffer, M. 2015. Fast-classifying, high-accuracy spik-
+ing deep networks through weight and threshold balancing.
+In 2015 International joint conference on neural networks
+(IJCNN), 1–8. ieee.
+Ding, J.; Yu, Z.; Tian, Y .; and Huang, T. 2021. Op-
+timal ANN-SNN conversion for fast and accurate infer-
+ence in deep spiking neural networks. arXiv preprint
+arXiv:2105.11654.
+Dosovitskiy, A.; Beyer, L.; Kolesnikov, A.; Weissenborn,
+D.; Zhai, X.; Unterthiner, T.; Dehghani, M.; Minderer, M.;
+Heigold, G.; Gelly, S.; et al. 2020. An image is worth 16x16
+words: Transformers for image recognition at scale. arXiv
+preprint arXiv:2010.11929.
+He, K.; Zhang, X.; Ren, S.; and Sun, J. 2016. Deep resid-
+ual learning for image recognition. In Proceedings of the
+IEEE conference on computer vision and pattern recogni-
+tion, 770–778.
+Hochreiter, S.; and Schmidhuber, J. 1997. Long short-term
+memory. Neural computation, 9(8): 1735–1780.
+Huang, Z.; Shi, X.; Hao, Z.; Bu, T.; Ding, J.; Yu, Z.; and
+Huang, T. 2024. Towards High-performance Spiking Trans-
+formers from ANN to SNN Conversion. In Proceedings
+of the 32nd ACM International Conference on Multimedia,
+10688–10697.
+Hwang, S.; Lee, S.; Park, D.; Lee, D.; and Kung, J.
+2024. Spikedattention: Training-free and fully spike-driven
+transformer-to-snn conversion with winner-oriented spike
+shift for softmax operation. Advances in Neural Informa-
+tion Processing Systems, 37: 67422–67445.
+Jiang, H.; Anumasa, S.; De Masi, G.; Xiong, H.; and Gu, B.
+2023. A unified optimization framework of ANN-SNN con-
+version: towards optimal mapping from activation values to
+firing rates. In International Conference on Machine Learn-
+ing, 14945–14974. PMLR.
+Jiang, Y .; Hu, K.; Zhang, T.; Gao, H.; Liu, Y .; Fang, Y .; and
+Chen, F. 2024. Spatio-temporal approximation: A training-
+free snn conversion for transformers. In The Twelfth Inter-
+national Conference on Learning Representations.
+Kahan, W. 1996. IEEE standard 754 for binary floating-
+point arithmetic. Lecture Notes on the Status of IEEE,
+754(94720-1776): 11.
+Li, C.; Ma, L.; and Furber, S. 2022. Quantization framework
+for fast spiking neural networks. Frontiers in Neuroscience,
+16: 918793.
+Li, Y .; Lei, Y .; and Yang, X. 2022. Spikeformer: A novel
+architecture for training high-performance low-latency spik-
+ing neural network. arXiv preprint arXiv:2211.10686.
+Li, Z.; and Gu, Q. 2023. I-vit: Integer-only quantization for
+efficient vision transformer inference. In Proceedings of the
+IEEE/CVF International Conference on Computer Vision,
+17065–17075.
+Liang, Y .; Wei, W.; Belatreche, A.; Cao, H.; Zhou, Z.; Wang,
+S.; Zhang, M.; and Yang, Y . 2025. Towards Accurate Binary
+Spiking Neural Networks: Learning with Adaptive Gradient
+Modulation Mechanism. In Proceedings of the AAAI Con-
+ference on Artificial Intelligence, volume 39, 1402–1410.
+Liu, C.; Shen, J.; Ran, X.; Xu, M.; Xu, Q.; Xu, Y .; and Pan,
+G. 2025. Efficient ANN-SNN Conversion with Error Com-
+pensation Learning. arXiv preprint arXiv:2506.01968.
+Liu, Y .; Ott, M.; Goyal, N.; Du, J.; Joshi, M.; Chen, D.;
+Levy, O.; Lewis, M.; Zettlemoyer, L.; and Stoyanov, V .
+2019. Roberta: A robustly optimized bert pretraining ap-
+proach. arXiv preprint arXiv:1907.11692.
+Maass, W. 1997. Networks of spiking neurons: the third gen-
+eration of neural network models. Neural networks, 10(9):
+1659–1671.
+Mao, R.; Tang, L.; Xia, Z.; Shen, A.; Wei, H.; Zhang, Z.;
+Lu, Y .; Long, Y .; Guo, J.; Zhou, L.; et al. 2025. FSNAP: An
+Ultra-Energy-Efficient Reconfigurable Few-Spikes-Neuron-
+Based SNN Processor Supporting Unified On-Chip Learn-
+ing and Adaptive Time-Window Tuning. IEEE Journal of
+Solid-State Circuits.
+Meng, Q.; Xiao, M.; Yan, S.; Wang, Y .; Lin, Z.; and Luo,
+Z.-Q. 2022. Training high-performance low-latency spiking
+neural networks by differentiation on spike representation.
+In Proceedings of the IEEE/CVF conference on computer
+vision and pattern recognition, 12444–12453.
+Neftci, E. O.; Mostafa, H.; and Zenke, F. 2019. Surrogate
+gradient learning in spiking neural networks: Bringing the
+power of gradient-based optimization to spiking neural net-
+works. IEEE Signal Processing Magazine, 36(6): 51–63.
+2135
+Radford, A.; Wu, J.; Child, R.; Luan, D.; Amodei, D.;
+Sutskever, I.; et al. 2019. Language models are unsupervised
+multitask learners. OpenAI blog, 1(8): 9.
+Rathi, N.; and Roy, K. 2020. Diet-snn: Direct input encod-
+ing with leakage and threshold optimization in deep spiking
+neural networks. arXiv preprint arXiv:2008.03658.
+Rueckauer, B.; Lungu, I.-A.; Hu, Y .; Pfeiffer, M.; and Liu,
+S.-C. 2017. Conversion of continuous-valued deep networks
+to efficient event-driven networks for image classification.
+Frontiers in neuroscience, 11: 682.
+Shan, Y .; Ren, Z.; Wu, H.; Wei, W.; Zhu, R.-J.; Wang, S.;
+Zhang, D.; Xiao, Y .; Zhang, J.; Shi, K.; et al. 2025. Sdtrack:
+A baseline for event-based tracking via spiking neural net-
+works. arXiv preprint arXiv:2503.08703.
+Simonyan, K.; and Zisserman, A. 2014. Very deep convo-
+lutional networks for large-scale image recognition. arXiv
+preprint arXiv:1409.1556.
+St¨ockl, C.; and Maass, W. 2021. Optimized spiking neu-
+rons can classify images with high accuracy through tem-
+poral coding with two spikes. Nature Machine Intelligence,
+3(3): 230–238.
+Sun, Q.; Lu, C.; Chen, W.; Wei, W.; Wang, J.; Zhang, J.;
+Liu, X.; Ye, Y .; Yang, Y .; and Zhang, M. 2025. Temporal-
+coded Spiking Transformer. InProceedings of the 33rd ACM
+International Conference on Multimedia, 2616–2624.
+Vaswani, A.; Shazeer, N.; Parmar, N.; Uszkoreit, J.; Jones,
+L.; Gomez, A. N.; Kaiser, Ł.; and Polosukhin, I. 2017. At-
+tention is all you need. Advances in neural information pro-
+cessing systems, 30.
+Wang, S.; Zhang, D.; Belatreche, A.; Xiao, Y .; Qing, H.;
+Wei, W.; Zhang, M.; and Yang, Y . 2025a. Ternary spike-
+based neuromorphic signal processing system. Neural Net-
+works, 187: 107333.
+Wang, S.; Zhang, M.; Zhang, D.; Belatreche, A.; Xiao, Y .;
+Liang, Y .; Shan, Y .; Sun, Q.; Zhang, E.; and Yang, Y . 2025b.
+Spiking vision transformer with saccadic attention. arXiv
+preprint arXiv:2502.12677.
+Wang, S.; Zheng, H.; Chen, Y .; Belatreche, A.; Wang, G.;
+Jin, Y .; Wu, J.; Zhang, M.; Yang, Y .; and Li, H. 2025c. SNN-
+FT: Temporal-Coded Spiking Neural Networks for Fourier
+Transform. IEEE Transactions on Neural Networks and
+Learning Systems.
+Wang, Y .; Zhang, M.; Chen, Y .; and Qu, H. 2022a. Signed
+Neuron with Memory: Towards Simple, Accurate and High-
+Efficient ANN-SNN Conversion. In IJCAI, 2501–2508.
+Wang, Z.; Fang, Y .; Cao, J.; Ren, H.; and Xu, R. 2025d.
+Adaptive calibration: A unified conversion framework of
+spiking neural networks. In Proceedings of the AAAI Con-
+ference on Artificial Intelligence, volume 39, 1583–1591.
+Wang, Z.; Fang, Y .; Cao, J.; Zhang, Q.; Wang, Z.; and Xu,
+R. 2023. Masked spiking transformer. In Proceedings of
+the IEEE/CVF International Conference on Computer Vi-
+sion, 1761–1771.
+Wang, Z.; Lian, S.; Zhang, Y .; Cui, X.; Yan, R.; and Tang, H.
+2022b. Towards lossless ANN-SNN conversion under ultra-
+low latency with dual-phase optimization. arXiv preprint
+arXiv:2205.07473.
+Wei, W.; Liang, Y .; Belatreche, A.; Xiao, Y .; Cao, H.; Ren,
+Z.; Wang, G.; Zhang, M.; and Yang, Y . 2024. Q-snns: Quan-
+tized spiking neural networks. In Proceedings of the 32nd
+ACM international conference on multimedia, 8441–8450.
+Wei, W.; Zhang, M.; Zhou, Z.; Belatreche, A.; Shan, Y .;
+Liang, Y .; Cao, H.; Zhang, J.; and Yang, Y . 2025. Qp-
+snn: Quantized and pruned spiking neural networks. arXiv
+preprint arXiv:2502.05905.
+Wu, Y .; Deng, L.; Li, G.; Zhu, J.; and Shi, L. 2018. Spatio-
+temporal backpropagation for training high-performance
+spiking neural networks. Frontiers in neuroscience, 12: 331.
+Xiao, Y .; Wang, S.; Zhang, D.; Wei, W.; Shan, Y .; Liu,
+X.; Jiang, Y .; and Zhang, M. 2025. Rethinking Spiking
+Self-Attention Mechanism: Implementing a-XNOR Similar-
+ity Calculation in Spiking Transformers. In Proceedings of
+the Computer Vision and Pattern Recognition Conference,
+5444–5454.
+Yao, M.; Hu, J.; Zhou, Z.; Yuan, L.; Tian, Y .; Xu, B.; and
+Li, G. 2023a. Spike-driven transformer. Advances in neural
+information processing systems, 36: 64043–64058.
+Yao, M.; Qiu, X.; Hu, T.; Hu, J.; Chou, Y .; Tian, K.; Liao,
+J.; Leng, L.; Xu, B.; and Li, G. 2025. Scaling spike-driven
+transformer with efficient spike firing approximation train-
+ing. IEEE Transactions on Pattern Analysis and Machine
+Intelligence.
+Yao, M.; Zhao, G.; Zhang, H.; Hu, Y .; Deng, L.; Tian, Y .;
+Xu, B.; and Li, G. 2023b. Attention spiking neural networks.
+IEEE transactions on pattern analysis and machine intelli-
+gence, 45(8): 9393–9410.
+You, K.; Xu, Z.; Nie, C.; Deng, Z.; Guo, Q.; Wang, X.; and
+He, Z. 2024. SpikeZIP-TF: Conversion is all you need for
+transformer-based SNN. arXiv preprint arXiv:2406.03470.
+Zhang, D.; Zhang, M.; Wang, S.; Wang, J.; Wei, W.; Ma, Z.;
+Wang, G.; Yang, Y .; and Li, H. 2025a. Dendritic Resonate-
+and-Fire Neuron for Effective and Efficient Long Sequence
+Modeling. arXiv preprint arXiv:2509.17186.
+Zhang, M.; Luo, X.; Wu, J.; Belatreche, A.; Cai, S.; Yang,
+Y .; and Li, H. 2025b. Toward Building Human-Like Sequen-
+tial Memory Using Brain-Inspired Spiking Neural Models.
+IEEE transactions on neural networks and learning systems.
+Zhang, M.; Wei, W.; Zhou, Z.; Liu, W.; Zhang, J.; Bela-
+treche, A.; and Yang, Y . 2025c. Spike-Driven Lightweight
+Large Language Model With Evolutionary Computation.
+IEEE Transactions on Evolutionary Computation.
+Zhou, C.; Yu, L.; Zhou, Z.; Ma, Z.; Zhang, H.; Zhou, H.; and
+Tian, Y . 2023. Spikingformer: Spike-driven residual learn-
+ing for transformer-based spiking neural network. arXiv
+preprint arXiv:2304.11954.
+Zhou, C.; Zhang, H.; Zhou, Z.; Yu, L.; Huang, L.; Fan, X.;
+Yuan, L.; Ma, Z.; Zhou, H.; and Tian, Y . 2024. Qkformer:
+Hierarchical spiking transformer using qk attention. arXiv
+preprint arXiv:2403.16552.
+Zhu, R.-J.; Zhao, Q.; Li, G.; and Eshraghian, J. K. 2023.
+Spikegpt: Generative pre-trained language model with spik-
+ing neural networks. arXiv preprint arXiv:2302.13939.
+2136
