@@ -81,8 +81,8 @@ def calibrate_ranges(model, loader, device):
 def main():
     parser = argparse.ArgumentParser(description="Test SNN converted from ANN with MBE neurons")
     parser.add_argument('--load_name', type=str, default='mnist_mlp.pth', help='Model filename to load')
-    parser.add_argument('--timesteps', type=int, default=16, help='SNN simulation timesteps (T)')
-    parser.add_argument('--num_basis', type=int, default=8, help='Number of basis components for MBE (N)')
+    parser.add_argument('--timesteps', type=int, default=16, help='Number of timesteps (T)')
+    parser.add_argument('--num_basis', type=int, default=4, help='Number of basis functions (N)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for evaluation')
     parser.add_argument('--force_train', action='store_true', help='Force fresh training of MBE neurons')
     
@@ -149,47 +149,36 @@ def main():
 
     # 4. Verification
     # 4. Verification
-    print("\nEvaluating SNN Metrics...")
-    snn_acc, avg_sops = evaluate_with_metrics(snn_model, test_loader, device)
+    print("\nEvaluating SNN Metrics (Paper Methodology)...")
+    snn_acc, avg_sops, avg_eta = evaluate_with_metrics(snn_model, test_loader, device)
     
     # 5. Precise ANN Energy Analysis (Hardware-level FLOPs breakdown)
-    # Reference: 45nm CMOS (Horowitz 2014)
-    E_ADD = 0.9    # pJ
+    # Horowitz (2014) 45nm CMOS: 32b FP MAC ~ 4.6 pJ, 32b FP SOP ~ 0.9 pJ
+    E_ADD = 0.9    # pJ (Standard AC energy)
     E_MUL = 3.7    # pJ
     E_MAC = 4.6    # pJ (E_MUL + E_ADD)
-    E_COMPLEX = 50.0 # pJ (Div, Exp, Sqrt - high cost transcendental ops)
+    E_COMPLEX = 50.0 # pJ (Div, Exp, Sqrt)
 
     hidden_dim = checkpoint['hidden_dim']
     num_classes = checkpoint['num_classes']
     in_dim = checkpoint['input_dim']
 
     # --- ANN Energy Breakdown ---
-    # 1. Linear Layers (MACs)
     linear_macs = (in_dim * hidden_dim) + (hidden_dim * hidden_dim) + (hidden_dim * num_classes)
     e_linear = linear_macs * E_MAC
-
-    # 2. LayerNorm (2 instances)
-    # Per-element: 4 Adds, 2 Muls, 2 Complex (Div/Sqrt)
     e_ln = (hidden_dim * 2) * (4 * E_ADD + 2 * E_MUL + 2 * E_COMPLEX)
-
-    # 3. GELU (2 instances)
-    # Per-element: 2 Adds, 2 Muls, 1 Complex (Exp/Tanh approx)
     e_gelu = (hidden_dim * 2) * (2 * E_ADD + 2 * E_MUL + 1 * E_COMPLEX)
-
-    # 4. Softmax
-    # Per-element: 1 Add, 1 Complex (Exp), plus global Div (Complex)
     e_softmax = num_classes * (E_ADD + E_COMPLEX) + E_COMPLEX
 
     total_ann_energy = e_linear + e_ln + e_gelu + e_softmax
 
     # --- SNN Energy Analysis ---
-    # SNN replaces all operations with spiking additions (SOPs)
     total_snn_energy = avg_sops * E_ADD
-    
     energy_saving = (1 - total_snn_energy / total_ann_energy) * 100
 
-    print(f"\n--- High-Fidelity Energy Report ---")
+    print(f"\n--- High-Fidelity Energy Report (Paper Criteria) ---")
     print(f"ANN Acc: {ann_acc:.2f}%, SNN Acc: {snn_acc:.2f}% (Delta: {ann_acc - snn_acc:.2f}%)")
+    print(f"Avg Firing Rate (eta): {avg_eta*100:.2f}%")
     print(f"Avg SOPs: {avg_sops:.2f}, Energy Saving: {energy_saving:.2f}%")
     
     # 6. Numerical Result Visualization (Detailed Table)

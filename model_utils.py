@@ -36,36 +36,51 @@ def evaluate_with_metrics(model, loader, device):
     correct = 0
     total = 0
     total_sops = 0
+    total_spikes = 0
+    total_possible_spikes = 0
     
     # We will use a hook to count SOPs correctly
     def get_sop_hook(fan_out=1):
         def hook(module, input, output):
-            if isinstance(output, tuple) and len(output) >= 2:
-                # s_seq: (T, N, Batch, Dim)
+            nonlocal total_sops, total_spikes, total_possible_spikes
+            # output of MBENeuron is (out, s_seq, d_seq) if return_sequences=True
+            # or just (out) if return_sequences=False
+            # Track firing rate (eta)
+            if isinstance(output, tuple):
                 s_seq = output[1]
-                spikes = s_seq.sum().item()
-                # Synaptic Operations = Spikes * Fan-out
-                # For activations, fan_out is 1. For Linear, it's out_features.
-                nonlocal total_sops
-                total_sops += spikes * fan_out
+                num_spikes = s_seq.sum().item()
+                total_spikes += num_spikes
+                total_possible_spikes += s_seq.numel()
+                total_sops += num_spikes * fan_out
+            
+            # Special handling for MBEMultiplier interaction energy
+            if isinstance(module, MBEMultiplier) and hasattr(module, 'last_interaction_sops'):
+                total_sops += module.last_interaction_sops
         return hook
 
     hooks = []
     # Identify modules and attach appropriate hooks
-    from mbe_modules import MBELinear, MBEActivation, MBELayerNorm, MBESoftmax
+    from mbe_modules import MBELinear, MBEActivation, MBELayerNorm, MBESoftmax, MBEMultiplier
     
     for name, m in model.named_modules():
-        if isinstance(m, MBELinear):
-            # For Linear, SOPs = Input Spikes * Out Features
-            # We hook the internal mbe_id neuron
-            if m.mbe_id is not None:
-                hooks.append(m.mbe_id.register_forward_hook(get_sop_hook(fan_out=m.out_features)))
-        elif isinstance(m, (MBEActivation, MBELayerNorm, MBESoftmax)):
-            # For these, we search for internal MBENeurons and hook them with fan_out=1
-            for sub_m in m.modules():
-                if isinstance(sub_m, MBENeuron):
-                    # Avoid double hooking if it's already handled
-                    hooks.append(sub_m.register_forward_hook(get_sop_hook(fan_out=1)))
+        if isinstance(m, MBEMultiplier):
+            # Quadratic interaction: T^2 * eta1 * eta2 * MO
+            # Handled via custom logic or specialized hooks if necessary
+            pass
+        
+        # We hook every MBENeuron to get base firing rates
+        if isinstance(m, MBENeuron):
+            parent = None
+            for p_name, p_m in model.named_modules():
+                if hasattr(p_m, 'mbe') and p_m.mbe == m:
+                    parent = p_m
+                    break
+            
+            f_out = 1
+            if parent and hasattr(parent, 'weight'):
+                f_out = parent.weight.shape[0] # out_features
+            
+            hooks.append(m.register_forward_hook(get_sop_hook(fan_out=f_out)))
 
     print(f"Starting SNN Evaluation on {len(loader.dataset)} samples...")
     batch_count = 0
@@ -97,8 +112,9 @@ def evaluate_with_metrics(model, loader, device):
     for h in hooks: h.remove()
     acc = 100 * correct / total
     avg_sops_per_sample = total_sops / total
+    avg_eta = (total_spikes / total_possible_spikes) if total_possible_spikes > 0 else 0
     
-    return acc, avg_sops_per_sample
+    return acc, avg_sops_per_sample, avg_eta
 
 def train_ann(model, train_loader, device, epochs=10, lr=0.001):
     model.to(device)

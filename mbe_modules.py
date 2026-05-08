@@ -77,7 +77,7 @@ class MBELinear(nn.Module):
     MBE-based Linear Layer.
     Approximates y = MBE_FP(W, x) + b
     """
-    def __init__(self, in_features, out_features, bias=True, timesteps=16, num_basis=8):
+    def __init__(self, in_features, out_features, bias=True, num_basis=8, timesteps=16, epochs=1000, lr=0.01, alpha=1.0, model_path=None):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -87,13 +87,12 @@ class MBELinear(nn.Module):
         else:
             self.register_parameter('bias', None)
         
-        self.timesteps = timesteps
+        self.mbe = MBENeuron(num_basis=num_basis, timesteps=timesteps, alpha=alpha)
         self.num_basis = num_basis
-        self.mbe_id = None # Identity MBE for encoding input x
 
     def initialize_multiplier(self, mbe_id_model):
         """Stores the identity MBE neuron for encoding input."""
-        self.mbe_id = mbe_id_model
+        self.mbe = mbe_id_model
 
     def forward(self, x):
         """
@@ -108,9 +107,9 @@ class MBELinear(nn.Module):
         s_x = x.abs().max().detach().clamp(min=1e-6)
         x_norm = (x / s_x).clamp(-1, 1)
 
-        # 2. Encode Normalized Input x into spikes (s) and intensity (d)
-        # s_seq: (T, N, Batch, In), d_seq_scaled: (T, N, Batch, In)
-        _, s_seq, d_seq_scaled = self.mbe_id(x_norm, return_sequences=True)
+        # 1. Encode input x into spike sequences
+        # MBE forward returns (decoded_val, s_seq, d_seq_scaled)
+        _, s_seq, d_seq_scaled = self.mbe(x_norm, return_sequences=True)
         
         # 3. Efficient Vectorized Accumulation (SOP Logic)
         T, N, B, I = s_seq.shape

@@ -51,13 +51,14 @@ class MBEMultiplier(nn.Module):
         d2_b = d2_flat.t().unsqueeze(1)
         
         # Interaction Matrices (Batch, K, K)
-        # This is where the GPU shines! 
-        # Construction of these large tensors is fast on VRAM.
-        S = torch.matmul(s1_b, s2_b) # Spike interactions
+        S = torch.matmul(s1_b, s2_b) # Spike interactions (Binary 0/1)
         D = torch.matmul(d1_b, d2_b) # Intensity interactions
         
+        # Track SOPs for the paper's methodology
+        # Each '1' in S represents a spiking interaction (SOP)
+        self.last_interaction_sops = S.sum().item()
+        
         # 3. Final Sum of Interactions: y = sum(S * D)
-        # Element-wise product and then sum over the (K, K) interaction grid
         approx_product_flat = torch.sum(S * D, dim=(1, 2))
         
         # Reshape back to (Batch, Features)
