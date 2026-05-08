@@ -114,7 +114,7 @@ def main():
     # Load MNIST data
     train_loader, test_loader = generate_data(batch_size=args.batch_size)
     
-    ann_acc, _ = evaluate_with_metrics(ann_model, test_loader, device)
+    ann_acc, _, _ = evaluate_with_metrics(ann_model, test_loader, device)
     print(f"Loaded ANN Test Accuracy: {ann_acc:.2f}%")
 
     # 3. Calibration & Conversion

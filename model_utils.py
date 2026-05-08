@@ -133,5 +133,5 @@ def train_ann(model, train_loader, device, epochs=10, lr=0.001):
             optimizer.step()
             total_loss += loss.item()
         
-        acc, _ = evaluate_with_metrics(model, train_loader, device)
+        acc, _, _ = evaluate_with_metrics(model, train_loader, device)
         print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_loader):.4f}, Train Acc: {acc:.2f}%")
