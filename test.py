@@ -152,45 +152,74 @@ def main():
     print("\nEvaluating SNN Metrics (Paper Methodology)...")
     snn_acc, avg_sops, avg_eta = evaluate_with_metrics(snn_model, test_loader, device)
     
-    # 5. Precise ANN Energy Analysis (Hardware-level FLOPs breakdown)
-    # Horowitz (2014) 45nm CMOS: 32b FP MAC ~ 4.6 pJ, 32b FP SOP ~ 0.9 pJ
-    E_ADD = 0.9    # pJ (Standard AC energy)
+    # 5. CDCER (Comprehensive Dynamic Compute Efficiency Ratio) Analysis
+    # Based on report: Horowitz 45nm CMOS + Complex Op breakdown
+    E_ADD = 0.9    # pJ
     E_MUL = 3.7    # pJ
-    E_MAC = 4.6    # pJ (E_MUL + E_ADD)
-    E_COMPLEX = 50.0 # pJ (Div, Exp, Sqrt)
+    E_MAC = 4.6    # pJ
+    E_DIV = 12 * E_MAC  # 55.2 pJ
+    E_SQRT = 12 * E_MAC # 55.2 pJ
+    E_EXP = 17 * E_MAC  # 78.2 pJ
 
     hidden_dim = checkpoint['hidden_dim']
     num_classes = checkpoint['num_classes']
     in_dim = checkpoint['input_dim']
+    T = args.timesteps
+    N = args.num_basis
 
-    # --- ANN Energy Breakdown ---
+    # --- 5.1 ANN Energy Baseline (Refined) ---
+    # Linear: y = Wx + b
     linear_macs = (in_dim * hidden_dim) + (hidden_dim * hidden_dim) + (hidden_dim * num_classes)
-    e_linear = linear_macs * E_MAC
-    e_ln = (hidden_dim * 2) * (4 * E_ADD + 2 * E_MUL + 2 * E_COMPLEX)
-    e_gelu = (hidden_dim * 2) * (2 * E_ADD + 2 * E_MUL + 1 * E_COMPLEX)
-    e_softmax = num_classes * (E_ADD + E_COMPLEX) + E_COMPLEX
+    e_ann_linear = linear_macs * E_MAC
 
-    total_ann_energy = e_linear + e_ln + e_gelu + e_softmax
+    # LayerNorm: mean (N-1 add, 1 div), var (N-1 sub, N-1 mul, N-1 add, 1 div), norm (1 sqrt, 1 div, N mul, N add)
+    # Approx per element: 4 Adds (0.9), 1 Mul (3.7), 1 Sqrt (55.2), 3 Divs (165.6)
+    # Total approx per element = 3.6 + 3.7 + 55.2 + 165.6 = 228.1 pJ
+    e_ann_ln = (hidden_dim * 2) * (4 * E_ADD + 1 * E_MUL + 1 * E_SQRT + 3 * E_DIV)
 
-    # --- SNN Energy Analysis ---
-    total_snn_energy = avg_sops * E_ADD
-    energy_saving = (1 - total_snn_energy / total_ann_energy) * 100
+    # GELU: 0.5x(1 + tanh(...)) -> Approx 1 Exp (78.2), 3 Mul (11.1), 2 Add (1.8)
+    # Total approx per element = 78.2 + 11.1 + 1.8 = 91.1 pJ
+    e_ann_gelu = (hidden_dim * 2) * (1 * E_EXP + 3 * E_MUL + 2 * E_ADD)
 
-    print(f"\n--- High-Fidelity Energy Report (Paper Criteria) ---")
+    # Softmax: exp (1), sum (N-1), div (1)
+    # Approx per element: 1 Exp (78.2), 1 Add (0.9), 1 Div (55.2)
+    e_ann_softmax = num_classes * (E_EXP + E_ADD + E_DIV)
+
+    total_ann_energy = e_ann_linear + e_ann_ln + e_ann_gelu + e_ann_softmax
+
+    # --- 5.2 SNN Energy (Inference + Pre-compute) ---
+    # SNN Inference Energy (Pure SOPs at 0.9 pJ)
+    e_snn_inference = avg_sops * E_ADD
+    
+    # SNN Pre-computation Energy (One-time cost to cache Weff = W * dn)
+    # Only for Linear layers weights
+    num_weights = (in_dim * hidden_dim) + (hidden_dim * hidden_dim) + (hidden_dim * num_classes)
+    e_snn_precompute = (num_weights * N * T) * E_MUL
+    
+    # Total SNN Energy (Amortized over K samples, K=10000 for evaluation)
+    K = 10000 
+    total_snn_energy = (e_snn_precompute / K) + e_snn_inference
+    
+    cdcer = (1 - total_snn_energy / total_ann_energy) * 100
+
+    print(f"\n--- CDCER (Comprehensive Dynamic Compute Efficiency Ratio) ---")
     print(f"ANN Acc: {ann_acc:.2f}%, SNN Acc: {snn_acc:.2f}% (Delta: {ann_acc - snn_acc:.2f}%)")
     print(f"Avg Firing Rate (eta): {avg_eta*100:.2f}%")
-    print(f"Avg SOPs: {avg_sops:.2f}, Energy Saving: {energy_saving:.2f}%")
+    print(f"ANN Total Energy: {total_ann_energy/1e6:.2f} uJ (Non-linear overhead included)")
+    print(f"SNN Total Energy: {total_snn_energy/1e6:.2f} uJ (Pre-compute amortized)")
+    print(f"CDCER Score: {cdcer:.2f}%")
     
-    # 6. Numerical Result Visualization (Detailed Table)
-    fig, ax = plt.subplots(figsize=(10, 5))
+    # 6. Result Visualization
+    fig, ax = plt.subplots(figsize=(12, 6))
     ax.axis('off')
     
     table_data = [
-        ["Metric", "ANN (FLOPs Breakdown)", f"SNN (T={args.timesteps}, N={args.num_basis})", "Efficiency Gain"],
+        ["Metric", "ANN (Baseline)", "SNN (Proposed)", "Efficiency Gain (CDCER)"],
         ["Accuracy", f"{ann_acc:.2f}%", f"{snn_acc:.2f}%", f"{ann_acc - snn_acc:.2f}% (Drop)"],
-        ["Linear Energy", f"{e_linear/1e6:.2f} uJ", f"Included in SOPs", "-"],
-        ["Non-Linear Energy", f"{(e_ln+e_gelu+e_softmax)/1e6:.2f} uJ", f"Included in SOPs", "-"],
-        ["Total Energy", f"{total_ann_energy/1e6:.2f} uJ", f"{total_snn_energy/1e6:.2f} uJ", f"{energy_saving:.2f}% Saving"]
+        ["Linear Energy", f"{e_ann_linear/1e6:.2f} uJ", f"Included in SOPs", "-"],
+        ["Non-Linear Energy", f"{(e_ann_ln+e_ann_gelu+e_ann_softmax)/1e6:.2f} uJ", f"Included in SOPs", "-"],
+        ["Pre-compute Cost", "-", f"{e_snn_precompute/1e6:.2f} uJ (Total)", "Amortized over samples"],
+        ["Total Dynamic Energy", f"{total_ann_energy/1e6:.2f} uJ", f"{total_snn_energy/1e6:.2f} uJ", f"{cdcer:.2f}%"]
     ]
     
     table = ax.table(cellText=table_data, loc='center', cellLoc='center', colWidths=[0.2, 0.25, 0.3, 0.25])
