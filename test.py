@@ -152,46 +152,56 @@ def main():
     print("\nEvaluating SNN Metrics...")
     snn_acc, avg_sops = evaluate_with_metrics(snn_model, test_loader, device)
     
-    # 5. Precise ANN MAC Calculation (Fair Comparison)
-    # Horowitz (2014) 45nm CMOS: 32b FP MAC ~ 3.1 pJ, 32b FP SOP ~ 0.1 pJ
-    
-    # Linear Layers
-    linear_macs = (checkpoint['input_dim'] * checkpoint['hidden_dim']) + \
-                  (checkpoint['hidden_dim'] * checkpoint['hidden_dim']) + \
-                  (checkpoint['hidden_dim'] * checkpoint['num_classes'])
-    
-    # Non-linear Layers (Estimation in MAC-equivalents)
+    # 5. Precise ANN Energy Analysis (Hardware-level FLOPs breakdown)
+    # Reference: 45nm CMOS (Horowitz 2014)
+    E_ADD = 0.9    # pJ
+    E_MUL = 3.7    # pJ
+    E_MAC = 4.6    # pJ (E_MUL + E_ADD)
+    E_COMPLEX = 50.0 # pJ (Div, Exp, Sqrt - high cost transcendental ops)
+
     hidden_dim = checkpoint['hidden_dim']
     num_classes = checkpoint['num_classes']
-    
-    # LayerNorm (Approx 5 MACs per element: mean, var, norm, gamma, beta)
-    ln_macs = (hidden_dim * 2) * 5 
-    
-    # GELU (Approx 8 MACs per element: polynomial/tanh approximation)
-    gelu_macs = (hidden_dim * 2) * 8
-    
-    # Softmax (Approx 15 MACs per element: exp, sum, divide)
-    softmax_macs = num_classes * 15
-    
-    ann_macs = linear_macs + ln_macs + gelu_macs + softmax_macs
-    
-    ann_energy = ann_macs * 3.1
-    snn_energy = avg_sops * 0.1
-    energy_saving = (1 - snn_energy / ann_energy) * 100
+    in_dim = checkpoint['input_dim']
 
-    print(f"\n--- Result Summary ---")
+    # --- ANN Energy Breakdown ---
+    # 1. Linear Layers (MACs)
+    linear_macs = (in_dim * hidden_dim) + (hidden_dim * hidden_dim) + (hidden_dim * num_classes)
+    e_linear = linear_macs * E_MAC
+
+    # 2. LayerNorm (2 instances)
+    # Per-element: 4 Adds, 2 Muls, 2 Complex (Div/Sqrt)
+    e_ln = (hidden_dim * 2) * (4 * E_ADD + 2 * E_MUL + 2 * E_COMPLEX)
+
+    # 3. GELU (2 instances)
+    # Per-element: 2 Adds, 2 Muls, 1 Complex (Exp/Tanh approx)
+    e_gelu = (hidden_dim * 2) * (2 * E_ADD + 2 * E_MUL + 1 * E_COMPLEX)
+
+    # 4. Softmax
+    # Per-element: 1 Add, 1 Complex (Exp), plus global Div (Complex)
+    e_softmax = num_classes * (E_ADD + E_COMPLEX) + E_COMPLEX
+
+    total_ann_energy = e_linear + e_ln + e_gelu + e_softmax
+
+    # --- SNN Energy Analysis ---
+    # SNN replaces all operations with spiking additions (SOPs)
+    total_snn_energy = avg_sops * E_ADD
+    
+    energy_saving = (1 - total_snn_energy / total_ann_energy) * 100
+
+    print(f"\n--- High-Fidelity Energy Report ---")
     print(f"ANN Acc: {ann_acc:.2f}%, SNN Acc: {snn_acc:.2f}% (Delta: {ann_acc - snn_acc:.2f}%)")
     print(f"Avg SOPs: {avg_sops:.2f}, Energy Saving: {energy_saving:.2f}%")
     
-    # 5. Numerical Result Visualization (Table-like)
-    fig, ax = plt.subplots(figsize=(8, 4))
+    # 6. Numerical Result Visualization (Detailed Table)
+    fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis('off')
     
     table_data = [
-        ["Metric", "ANN (Baseline)", f"SNN (T={args.timesteps}, N={args.num_basis})", "Difference / Ratio"],
+        ["Metric", "ANN (FLOPs Breakdown)", f"SNN (T={args.timesteps}, N={args.num_basis})", "Efficiency Gain"],
         ["Accuracy", f"{ann_acc:.2f}%", f"{snn_acc:.2f}%", f"{ann_acc - snn_acc:.2f}% (Drop)"],
-        ["Operations", f"{ann_macs} MACs", f"{int(avg_sops)} SOPs (Avg)", f"{avg_sops/ann_macs:.1f} SOPs/MAC"],
-        ["Est. Energy", f"{ann_energy:.1f} pJ", f"{snn_energy:.1f} pJ", f"{energy_saving:.2f}% Saving"]
+        ["Linear Energy", f"{e_linear/1e6:.2f} uJ", f"Included in SOPs", "-"],
+        ["Non-Linear Energy", f"{(e_ln+e_gelu+e_softmax)/1e6:.2f} uJ", f"Included in SOPs", "-"],
+        ["Total Energy", f"{total_ann_energy/1e6:.2f} uJ", f"{total_snn_energy/1e6:.2f} uJ", f"{energy_saving:.2f}% Saving"]
     ]
     
     table = ax.table(cellText=table_data, loc='center', cellLoc='center', colWidths=[0.2, 0.25, 0.3, 0.25])
