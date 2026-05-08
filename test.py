@@ -148,20 +148,40 @@ def main():
         fc.initialize_multiplier(mbe_id)
 
     # 4. Verification
+    # 4. Verification
     print("\nEvaluating SNN Metrics...")
-    snn_acc, avg_spikes = evaluate_with_metrics(snn_model, test_loader, device)
+    snn_acc, avg_sops = evaluate_with_metrics(snn_model, test_loader, device)
     
-    ann_macs = (checkpoint['input_dim'] * checkpoint['hidden_dim']) + \
-               (checkpoint['hidden_dim'] * checkpoint['hidden_dim']) + \
-               (checkpoint['hidden_dim'] * checkpoint['num_classes'])
-               
+    # 5. Precise ANN MAC Calculation (Fair Comparison)
+    # Horowitz (2014) 45nm CMOS: 32b FP MAC ~ 3.1 pJ, 32b FP SOP ~ 0.1 pJ
+    
+    # Linear Layers
+    linear_macs = (checkpoint['input_dim'] * checkpoint['hidden_dim']) + \
+                  (checkpoint['hidden_dim'] * checkpoint['hidden_dim']) + \
+                  (checkpoint['hidden_dim'] * checkpoint['num_classes'])
+    
+    # Non-linear Layers (Estimation in MAC-equivalents)
+    hidden_dim = checkpoint['hidden_dim']
+    num_classes = checkpoint['num_classes']
+    
+    # LayerNorm (Approx 5 MACs per element: mean, var, norm, gamma, beta)
+    ln_macs = (hidden_dim * 2) * 5 
+    
+    # GELU (Approx 8 MACs per element: polynomial/tanh approximation)
+    gelu_macs = (hidden_dim * 2) * 8
+    
+    # Softmax (Approx 15 MACs per element: exp, sum, divide)
+    softmax_macs = num_classes * 15
+    
+    ann_macs = linear_macs + ln_macs + gelu_macs + softmax_macs
+    
     ann_energy = ann_macs * 3.1
-    snn_energy = avg_spikes * 0.1
+    snn_energy = avg_sops * 0.1
     energy_saving = (1 - snn_energy / ann_energy) * 100
 
     print(f"\n--- Result Summary ---")
     print(f"ANN Acc: {ann_acc:.2f}%, SNN Acc: {snn_acc:.2f}% (Delta: {ann_acc - snn_acc:.2f}%)")
-    print(f"Avg Spikes: {avg_spikes:.2f}, Energy Saving: {energy_saving:.2f}%")
+    print(f"Avg SOPs: {avg_sops:.2f}, Energy Saving: {energy_saving:.2f}%")
     
     # 5. Numerical Result Visualization (Table-like)
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -170,7 +190,7 @@ def main():
     table_data = [
         ["Metric", "ANN (Baseline)", f"SNN (T={args.timesteps}, N={args.num_basis})", "Difference / Ratio"],
         ["Accuracy", f"{ann_acc:.2f}%", f"{snn_acc:.2f}%", f"{ann_acc - snn_acc:.2f}% (Drop)"],
-        ["Operations", f"{ann_macs} MACs", f"{int(avg_spikes)} SOPs (Avg)", f"{avg_spikes/ann_macs:.1f} SOPs/MAC"],
+        ["Operations", f"{ann_macs} MACs", f"{int(avg_sops)} SOPs (Avg)", f"{avg_sops/ann_macs:.1f} SOPs/MAC"],
         ["Est. Energy", f"{ann_energy:.1f} pJ", f"{snn_energy:.1f} pJ", f"{energy_saving:.2f}% Saving"]
     ]
     
