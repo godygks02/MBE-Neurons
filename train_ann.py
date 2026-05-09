@@ -2,7 +2,7 @@ import torch
 import os
 import argparse
 from data_utils import generate_data
-from model_utils import ToyTransformerMLP, train_ann, get_device
+from model_utils import ToyTransformerMLP, train_ann, get_device, calculate_ann_energy
 
 def main():
     parser = argparse.ArgumentParser(description="Train ANN MNIST MLP for SNN conversion")
@@ -54,6 +54,19 @@ def main():
     
     torch.save(checkpoint, save_path)
     print(f"\nMNIST ANN Training complete. Model saved to {save_path}")
+
+    # 5. Theoretical Energy Analysis
+    energy = calculate_ann_energy(N_FEATURES, args.hidden_dim, N_CLASSES)
+    print("\n" + "="*40)
+    print("Theoretical ANN Energy Consumption (Per Sample)")
+    print("-" * 40)
+    print(f"Linear Ops:   {energy['breakdown_pj']['linear']/1e3:>10.2f} nJ")
+    print(f"LayerNorm:    {energy['breakdown_pj']['ln']/1e3:>10.2f} nJ")
+    print(f"GELU:         {energy['breakdown_pj']['gelu']/1e3:>10.2f} nJ")
+    print(f"Softmax:      {energy['breakdown_pj']['softmax']/1e3:>10.2f} nJ")
+    print("-" * 40)
+    print(f"Total Energy: {energy['total_uj']:>10.4f} uJ")
+    print("="*40)
 
 if __name__ == "__main__":
     main()

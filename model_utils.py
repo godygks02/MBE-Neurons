@@ -135,3 +135,40 @@ def train_ann(model, train_loader, device, epochs=10, lr=0.001):
         
         acc, _, _ = evaluate_with_metrics(model, train_loader, device)
         print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_loader):.4f}, Train Acc: {acc:.2f}%")
+
+def calculate_ann_energy(in_dim, hidden_dim, num_classes):
+    """
+    Calculate theoretical ANN energy consumption based on hardware analysis PDF.
+    Returns energy in pJ (pico-Joules) for a single forward pass.
+    """
+    # 1. Linear Layers (MACs * 4.6 pJ)
+    # FC1: in_dim -> hidden_dim
+    # FC2: hidden_dim -> hidden_dim
+    # FC3: hidden_dim -> num_classes
+    total_macs = (in_dim * hidden_dim) + (hidden_dim * hidden_dim) + (hidden_dim * num_classes)
+    e_linear = total_macs * 4.6
+    
+    # 2. LayerNorm (2 layers of size hidden_dim)
+    # E_LN(n) = 14.7 * n + 41.8 pJ
+    e_ln = 2 * (14.7 * hidden_dim + 41.8)
+    
+    # 3. GELU Activation (2 layers of size hidden_dim)
+    # E_GELU = 65.4 pJ per element
+    e_gelu = 2 * (hidden_dim * 65.4)
+    
+    # 4. Softmax (1 layer of size num_classes)
+    # E_Softmax(n) = 58.0 * n - 0.9 pJ
+    e_softmax = 58.0 * num_classes - 0.9
+    
+    total_energy = e_linear + e_ln + e_gelu + e_softmax
+    
+    return {
+        'total_pj': total_energy,
+        'total_uj': total_energy / 1e6,
+        'breakdown_pj': {
+            'linear': e_linear,
+            'ln': e_ln,
+            'gelu': e_gelu,
+            'softmax': e_softmax
+        }
+    }
