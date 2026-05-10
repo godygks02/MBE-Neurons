@@ -131,3 +131,55 @@ class MBELinear(nn.Module):
             self.weight.copy_(linear.weight)
             if self.bias is not None:
                 self.bias.copy_(linear.bias)
+
+class MBEConv1D(nn.Module):
+    """
+    MBE-based Conv1D for Hugging Face GPT-2.
+    GPT-2's Conv1D is essentially a Linear layer where weights are (in_features, out_features).
+    """
+    def __init__(self, nf, nx, num_basis=8, timesteps=16, epochs=1000, lr=0.01, alpha=1.0, model_path=None):
+        super().__init__()
+        self.nf = nf # out_features
+        self.nx = nx # in_features
+        self.weight = nn.Parameter(torch.Tensor(nx, nf))
+        self.bias = nn.Parameter(torch.Tensor(nf))
+        self.mbe = MBENeuron(num_basis=num_basis, timesteps=timesteps, alpha=alpha)
+        self.num_basis = num_basis
+        self.model_path = model_path
+        
+        if model_path and os.path.exists(model_path):
+            self.mbe = MBENeuron.load(model_path)
+
+    def initialize_multiplier(self, mbe_id_model):
+        self.mbe = mbe_id_model
+
+    def forward(self, x):
+        if self.mbe is None:
+            size_out = x.size()[:-1] + (self.nf,)
+            out = torch.addmm(self.bias, x.view(-1, x.size(-1)), self.weight)
+            return out.view(*size_out)
+
+        s_x = x.abs().max().detach().clamp(min=1e-6)
+        x_norm = (x / s_x).clamp(-1, 1)
+        
+        # Flatten for MBE encoding
+        x_flat = x_norm.view(-1, self.nx) 
+        
+        self.mbe.eval()
+        with torch.no_grad():
+            _, s_seq, d_seq_scaled = self.mbe(x_flat, return_sequences=True)
+            
+        T, N, B, I = s_seq.shape
+        flat_contributions = (s_seq * d_seq_scaled).reshape(T*N, B, I)
+        encoded_input_norm = flat_contributions.sum(dim=0)
+        encoded_input = encoded_input_norm * s_x
+        
+        # Conv1D logic
+        size_out = x.size()[:-1] + (self.nf,)
+        out = torch.addmm(self.bias, encoded_input, self.weight)
+        return out.view(*size_out)
+
+    def load_from_standard_conv1d(self, conv1d):
+        with torch.no_grad():
+            self.weight.copy_(conv1d.weight)
+            self.bias.copy_(conv1d.bias)
