@@ -187,11 +187,12 @@ def replace_modules_with_mbe(model, ranges, args, device):
         block.mlp.act = mbe_gelu.to(device)
 
         # Conv1D
+        import copy
         def replace_conv1d(conv1d_module, name):
             mbe_c = MBEConv1D(nf=conv1d_module.nf, nx=conv1d_module.weight.shape[0], 
                               num_basis=args.num_basis, timesteps=args.timesteps)
             mbe_c.load_from_standard_conv1d(conv1d_module)
-            mbe_c.initialize_multiplier(mbe_id)
+            mbe_c.initialize_multiplier(copy.deepcopy(mbe_id))
             return mbe_c.to(device)
 
         block.attn.c_attn = replace_conv1d(block.attn.c_attn, f"layer_{i}_c_attn")
@@ -208,8 +209,8 @@ def main():
     parser.add_argument('--evaluate_ann_only', action='store_true')
     parser.add_argument('--calibrate_only', action='store_true')
     parser.add_argument('--evaluate_snn', action='store_true')
-    parser.add_argument('--timesteps', type=int, default=8)
-    parser.add_argument('--num_basis', type=int, default=4)
+    parser.add_argument('--timesteps', type=int, default=16)
+    parser.add_argument('--num_basis', type=int, default=8)
     args = parser.parse_args()
 
     device = get_device()

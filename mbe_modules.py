@@ -159,7 +159,7 @@ class MBEConv1D(nn.Module):
             out = torch.addmm(self.bias, x.view(-1, x.size(-1)), self.weight)
             return out.view(*size_out)
 
-        s_x = x.abs().max().detach().clamp(min=1e-6)
+        s_x = x.abs().amax(dim=-1, keepdim=True).detach().clamp(min=1e-6)
         x_norm = (x / s_x).clamp(-1, 1)
         
         # Flatten for MBE encoding
@@ -172,11 +172,14 @@ class MBEConv1D(nn.Module):
         T, N, B, I = s_seq.shape
         flat_contributions = (s_seq * d_seq_scaled).reshape(T*N, B, I)
         encoded_input_norm = flat_contributions.sum(dim=0)
+        
+        # Reshape to match x for scaling
+        encoded_input_norm = encoded_input_norm.view(x.shape)
         encoded_input = encoded_input_norm * s_x
         
         # Conv1D logic
         size_out = x.size()[:-1] + (self.nf,)
-        out = torch.addmm(self.bias, encoded_input, self.weight)
+        out = torch.addmm(self.bias, encoded_input.view(-1, self.nx), self.weight)
         return out.view(*size_out)
 
     def load_from_standard_conv1d(self, conv1d):
