@@ -165,7 +165,7 @@ def replace_modules_with_mbe(model, ranges, args, device):
         mbe_id = MBENeuron.load(id_path)
     else:
         print("Training Global Identity MBE for Conv1D...")
-        mbe_id = train_mbe_neuron(lambda x: x, x_range=id_range, num_basis=args.num_basis, timesteps=args.timesteps, alpha=1.0, num_epochs=1000)
+        mbe_id = train_mbe_neuron(lambda x: x, x_range=id_range, num_basis=args.num_basis, timesteps=args.timesteps, alpha=1.0, num_epochs=args.epochs, l1_spike_weight=args.l1_spike_weight, target_loss=args.target_loss, patience=args.patience)
         mbe_id.save(id_path)
     
     mbe_id.to(device)
@@ -185,7 +185,7 @@ def replace_modules_with_mbe(model, ranges, args, device):
             gelu_r = ranges[f"layer_{i}_gelu"]
             gelu_path = os.path.join(model_dir, f"mbe_gelu_L{i}_T{args.timesteps}_N{args.num_basis}.pth")
             mbe_gelu = MBEGELU(timesteps=args.timesteps, num_basis=args.num_basis, model_path=gelu_path)
-            mbe_gelu.fit(x_range=(gelu_r[0], gelu_r[1]), epochs=args.epochs)
+            mbe_gelu.fit(x_range=(gelu_r[0], gelu_r[1]), epochs=args.epochs, l1_spike_weight=args.l1_spike_weight, target_loss=args.target_loss, patience=args.patience)
             block.mlp.act = mbe_gelu.to(device)
 
         # Conv1D
@@ -215,6 +215,9 @@ def main():
     parser.add_argument('--timesteps', type=int, default=16)
     parser.add_argument('--num_basis', type=int, default=8)
     parser.add_argument('--epochs', type=int, default=2000, help="Training epochs for MBE on-the-fly")
+    parser.add_argument('--l1_spike_weight', type=float, default=0.0, help="L1 regularization for spike suppression")
+    parser.add_argument('--target_loss', type=float, default=1e-4, help="Target MSE for early stopping")
+    parser.add_argument('--patience', type=int, default=1000, help="Patience for early stopping")
     parser.add_argument('--replace_conv1d', action='store_true', default=True)
     parser.add_argument('--replace_gelu', action='store_true', default=True)
     parser.add_argument('--replace_ln', action='store_true', default=True)

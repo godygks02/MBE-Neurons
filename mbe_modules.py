@@ -24,7 +24,7 @@ class MBEActivation(nn.Module):
         else:
             self.mbe = None
 
-    def fit(self, x_range=None, epochs=5000, lr=0.01):
+    def fit(self, x_range=None, epochs=5000, lr=0.01, l1_spike_weight=0.0, target_loss=1e-4, patience=1000):
         if x_range:
             self.x_range = x_range
 
@@ -52,7 +52,10 @@ class MBEActivation(nn.Module):
             lr=lr,
             num_basis=self.num_basis,
             timesteps=self.timesteps,
-            alpha=alpha
+            alpha=alpha,
+            l1_spike_weight=l1_spike_weight,
+            target_loss=target_loss,
+            patience=patience
         )
         if self.model_path:
             self.mbe.save(self.model_path)

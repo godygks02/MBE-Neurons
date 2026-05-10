@@ -192,7 +192,7 @@ class MBENeuron(nn.Module):
         model.to(device)
         return model
 
-def train_mbe_neuron(target_func, x_range=(-10, 10), num_samples=10000, num_epochs=5000, lr=0.01, tv_weight=0.0, device=None, target_loss=1e-4, **mbe_kwargs):
+def train_mbe_neuron(target_func, x_range=(-10, 10), num_samples=10000, num_epochs=5000, lr=0.01, tv_weight=0.0, l1_spike_weight=0.0, device=None, target_loss=1e-4, patience=500, **mbe_kwargs):
     """
     Utility function to optimize MBE Neuron parameters to fit a specific target function.
     
@@ -203,8 +203,10 @@ def train_mbe_neuron(target_func, x_range=(-10, 10), num_samples=10000, num_epoc
         num_epochs: Training epochs
         lr: Learning rate
         tv_weight: Weight for Total Variation regularization to reduce oscillations
+        l1_spike_weight: Weight for L1 regularization to suppress firing rate
         device: Device to use (cpu or cuda)
         target_loss: Early stopping threshold for MSE loss
+        patience: Epochs to wait for improvement before stopping (oscillation/stagnation)
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -218,10 +220,22 @@ def train_mbe_neuron(target_func, x_range=(-10, 10), num_samples=10000, num_epoc
     x = torch.linspace(x_range[0], x_range[1], num_samples, device=device).unsqueeze(1)
     y_target = target_func(x)
     
+    best_loss = float('inf')
+    patience_counter = 0
+
     for epoch in range(num_epochs):
         optimizer.zero_grad()
-        y_pred = mbe(x)
+        if l1_spike_weight > 0:
+            y_pred, s_seq, _ = mbe(x, return_sequences=True)
+        else:
+            y_pred = mbe(x)
+            
         loss = criterion(y_pred, y_target)
+        
+        # L1 Spike Regularization
+        if l1_spike_weight > 0:
+            spike_loss = s_seq.mean()
+            loss += l1_spike_weight * spike_loss
         
         # Total Variation Regularization (optional)
         if tv_weight > 0:
@@ -232,12 +246,24 @@ def train_mbe_neuron(target_func, x_range=(-10, 10), num_samples=10000, num_epoc
         optimizer.step()
         scheduler.step()
         
+        loss_val = loss.item()
         if (epoch + 1) % 200 == 0:
-            print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.6f}")
+            print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss_val:.6f}")
             
-        # Early Stopping
-        if loss.item() < target_loss:
-            print(f"Early stopping at epoch {epoch+1} with loss {loss.item():.6f}")
+        # Early Stopping on Target
+        if loss_val < target_loss:
+            print(f"Early stopping at epoch {epoch+1} with loss {loss_val:.6f} < target {target_loss}")
+            break
+            
+        # Early Stopping on Oscillation/Stagnation
+        if loss_val < best_loss - 1e-7:
+            best_loss = loss_val
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            
+        if patience_counter >= patience:
+            print(f"Early stopping at epoch {epoch+1} due to oscillation/stagnation. Best loss: {best_loss:.6f}")
             break
             
     return mbe
