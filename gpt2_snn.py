@@ -174,31 +174,34 @@ def replace_modules_with_mbe(model, ranges, args, device):
         print(f" Converting Layer {i}...")
         
         # LayerNorm
-        ln1_r = ranges[f"layer_{i}_ln_1"]
-        mbe_ln1 = MBELayerNorm(normalized_shape=block.ln_1.normalized_shape[0], timesteps=args.timesteps, num_basis=args.num_basis)
-        mbe_ln1.load_from_standard_layernorm(block.ln_1)
-        block.ln_1 = mbe_ln1.to(device)
+        if args.replace_ln:
+            ln1_r = ranges[f"layer_{i}_ln_1"]
+            mbe_ln1 = MBELayerNorm(normalized_shape=block.ln_1.normalized_shape[0], timesteps=args.timesteps, num_basis=args.num_basis)
+            mbe_ln1.load_from_standard_layernorm(block.ln_1)
+            block.ln_1 = mbe_ln1.to(device)
 
         # GELU
-        gelu_r = ranges[f"layer_{i}_gelu"]
-        gelu_path = os.path.join(model_dir, f"mbe_gelu_L{i}_T{args.timesteps}_N{args.num_basis}.pth")
-        mbe_gelu = MBEGELU(timesteps=args.timesteps, num_basis=args.num_basis, model_path=gelu_path)
-        mbe_gelu.fit(x_range=(gelu_r[0], gelu_r[1]), epochs=1000)
-        block.mlp.act = mbe_gelu.to(device)
+        if args.replace_gelu:
+            gelu_r = ranges[f"layer_{i}_gelu"]
+            gelu_path = os.path.join(model_dir, f"mbe_gelu_L{i}_T{args.timesteps}_N{args.num_basis}.pth")
+            mbe_gelu = MBEGELU(timesteps=args.timesteps, num_basis=args.num_basis, model_path=gelu_path)
+            mbe_gelu.fit(x_range=(gelu_r[0], gelu_r[1]), epochs=args.epochs)
+            block.mlp.act = mbe_gelu.to(device)
 
         # Conv1D
-        import copy
-        def replace_conv1d(conv1d_module, name):
-            mbe_c = MBEConv1D(nf=conv1d_module.nf, nx=conv1d_module.weight.shape[0], 
-                              num_basis=args.num_basis, timesteps=args.timesteps)
-            mbe_c.load_from_standard_conv1d(conv1d_module)
-            mbe_c.initialize_multiplier(copy.deepcopy(mbe_id))
-            return mbe_c.to(device)
+        if args.replace_conv1d:
+            import copy
+            def replace_conv1d(conv1d_module, name):
+                mbe_c = MBEConv1D(nf=conv1d_module.nf, nx=conv1d_module.weight.shape[0], 
+                                  num_basis=args.num_basis, timesteps=args.timesteps)
+                mbe_c.load_from_standard_conv1d(conv1d_module)
+                mbe_c.initialize_multiplier(copy.deepcopy(mbe_id))
+                return mbe_c.to(device)
 
-        block.attn.c_attn = replace_conv1d(block.attn.c_attn, f"layer_{i}_c_attn")
-        block.attn.c_proj = replace_conv1d(block.attn.c_proj, f"layer_{i}_attn_c_proj")
-        block.mlp.c_fc = replace_conv1d(block.mlp.c_fc, f"layer_{i}_c_fc")
-        block.mlp.c_proj = replace_conv1d(block.mlp.c_proj, f"layer_{i}_mlp_c_proj")
+            block.attn.c_attn = replace_conv1d(block.attn.c_attn, f"layer_{i}_c_attn")
+            block.attn.c_proj = replace_conv1d(block.attn.c_proj, f"layer_{i}_attn_c_proj")
+            block.mlp.c_fc = replace_conv1d(block.mlp.c_fc, f"layer_{i}_c_fc")
+            block.mlp.c_proj = replace_conv1d(block.mlp.c_proj, f"layer_{i}_mlp_c_proj")
         
     print("SNN Conversion Complete.")
     return model
@@ -211,6 +214,13 @@ def main():
     parser.add_argument('--evaluate_snn', action='store_true')
     parser.add_argument('--timesteps', type=int, default=16)
     parser.add_argument('--num_basis', type=int, default=8)
+    parser.add_argument('--epochs', type=int, default=2000, help="Training epochs for MBE on-the-fly")
+    parser.add_argument('--replace_conv1d', action='store_true', default=True)
+    parser.add_argument('--replace_gelu', action='store_true', default=True)
+    parser.add_argument('--replace_ln', action='store_true', default=True)
+    parser.add_argument('--no_replace_conv1d', action='store_false', dest='replace_conv1d')
+    parser.add_argument('--no_replace_gelu', action='store_false', dest='replace_gelu')
+    parser.add_argument('--no_replace_ln', action='store_false', dest='replace_ln')
     args = parser.parse_args()
 
     device = get_device()
