@@ -176,7 +176,15 @@ def replace_modules_with_mbe(model, ranges, args, device):
         # LayerNorm
         if args.replace_ln:
             ln1_r = ranges[f"layer_{i}_ln_1"]
-            mbe_ln1 = MBELayerNorm(normalized_shape=block.ln_1.normalized_shape[0], timesteps=args.timesteps, num_basis=args.num_basis)
+            mbe_ln1 = MBELayerNorm(
+                normalized_shape=block.ln_1.normalized_shape[0], 
+                timesteps=args.timesteps, 
+                num_basis=args.num_basis,
+                epochs=args.epochs,
+                l1_spike_weight=args.l1_spike_weight,
+                target_loss=args.target_loss,
+                patience=args.patience
+            )
             mbe_ln1.load_from_standard_layernorm(block.ln_1)
             block.ln_1 = mbe_ln1.to(device)
 

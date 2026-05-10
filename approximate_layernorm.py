@@ -42,7 +42,8 @@ MODEL_DIR = os.path.join(os.path.dirname(__file__), 'mbe_models', 'layernorm')
 # 공통 유틸리티
 # ─────────────────────────────────────────────────────────────────────────────
 def _load_or_train(model_path, target_func, x_range, tag,
-                   num_basis=8, timesteps=16, num_epochs=3000, lr=0.005, tv_weight=0.0):
+                   num_basis=8, timesteps=16, num_epochs=3000, lr=0.005, tv_weight=0.0,
+                   l1_spike_weight=0.0, target_loss=1e-4, patience=1000):
     os.makedirs(MODEL_DIR, exist_ok=True)
     if os.path.exists(model_path):
         print(f"[{tag}] Loading from {model_path}")
@@ -55,6 +56,7 @@ def _load_or_train(model_path, target_func, x_range, tag,
         target_func=target_func, x_range=x_range, num_samples=10000,
         num_epochs=num_epochs, lr=lr, tv_weight=tv_weight,
         num_basis=num_basis, timesteps=timesteps, alpha=alpha,
+        l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
     )
     model.save(model_path)
     print(f"[{tag}] Saved to {model_path}")
@@ -63,12 +65,14 @@ def _load_or_train(model_path, target_func, x_range, tag,
 
 def _make_id_multiplier(model_path, x_range, tag,
                         num_basis=8, timesteps=16,
-                        num_epochs=5000, lr=0.001, tv_weight=0.05):
+                        num_epochs=5000, lr=0.001, tv_weight=0.05,
+                        l1_spike_weight=0.0, target_loss=1e-4, patience=1000):
     """Identity MBE 학습 후 MBEMultiplier 반환."""
     mbe_id = _load_or_train(
         model_path, lambda x: x, x_range=x_range, tag=tag,
         num_basis=num_basis, timesteps=timesteps,
-        num_epochs=num_epochs, lr=lr, tv_weight=tv_weight
+        num_epochs=num_epochs, lr=lr, tv_weight=tv_weight,
+        l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
     )
     return MBEMultiplier(mbe_id_model=mbe_id)
 
@@ -97,18 +101,18 @@ class MBESquare(nn.Module):
     MBE 뉴런이 [-1, 1] 범위에서 a^2 함수를 직접 근사함.
     """
 
-    MODEL_SQ = 'mbe_ln_direct_sq.pth'
-
-    def __init__(self, num_basis=8, timesteps=16, epochs=5000, lr=0.001, tv_weight=0.05):
+    def __init__(self, num_basis=8, timesteps=16, epochs=5000, lr=0.001, tv_weight=0.05, l1_spike_weight=0.0, target_loss=1e-4, patience=1000):
         super().__init__()
         # x^2 직접 근사 (정규화된 범위 [-1, 1]에서 학습)
+        model_name = f"mbe_ln_direct_sq_T{timesteps}_N{num_basis}.pth"
         self.mbe_sq = _load_or_train(
-            model_path=os.path.join(MODEL_DIR, self.MODEL_SQ),
+            model_path=os.path.join(MODEL_DIR, model_name),
             target_func=lambda x: x**2,
             x_range=(-1.0, 1.0),
             tag='MBESquare',
             num_basis=num_basis, timesteps=timesteps,
-            num_epochs=epochs, lr=lr, tv_weight=tv_weight
+            num_epochs=epochs, lr=lr, tv_weight=tv_weight,
+            l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
         )
 
     def forward(self, x: torch.Tensor, dim: int = -1):
@@ -146,19 +150,19 @@ class MBEInvSqrt(nn.Module):
     MBE: M_adj ∈ [1, 4) → 1/sqrt(M_adj)
     """
 
-    MODEL_ID = 'mbe_ln_inv_sqrt_mantissa.pth'
-
-    def __init__(self, num_basis=8, timesteps=16, model_path=None, epochs=3000, lr=0.005, tv_weight=0.05):
+    def __init__(self, num_basis=8, timesteps=16, model_path=None, epochs=3000, lr=0.005, tv_weight=0.05, l1_spike_weight=0.0, target_loss=1e-4, patience=1000):
         super().__init__()
         if model_path is None:
-            model_path = os.path.join(MODEL_DIR, self.MODEL_ID)
+            model_name = f"mbe_ln_inv_sqrt_mantissa_T{timesteps}_N{num_basis}.pth"
+            model_path = os.path.join(MODEL_DIR, model_name)
         self.mbe_invsqrt = _load_or_train(
             model_path,
             target_func=lambda x: 1.0 / torch.sqrt(x.clamp(min=1e-6)),
             x_range=(1.0, 4.0 - 1e-3),
             tag='MBEInvSqrt-mantissa',
             num_basis=num_basis, timesteps=timesteps,
-            num_epochs=epochs, lr=lr, tv_weight=tv_weight
+            num_epochs=epochs, lr=lr, tv_weight=tv_weight,
+            l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
         )
 
     def forward(self, v: torch.Tensor) -> torch.Tensor:
@@ -187,25 +191,27 @@ class MBEFPScaling(nn.Module):
     곱셈 후 스케일 복원: result * s_c * s_i
     """
 
-    MODEL_NORM  = 'mbe_ln_id_norm.pth'
-    MODEL_GAMMA = 'mbe_ln_id_gamma.pth'
-
-    def __init__(self, normalized_dim: int, num_basis=8, timesteps=16, epochs=5000, lr=0.001, tv_weight=0.05):
+    def __init__(self, normalized_dim: int, num_basis=8, timesteps=16, epochs=5000, lr=0.001, tv_weight=0.05, l1_spike_weight=0.0, target_loss=1e-4, patience=1000):
         super().__init__()
         # 정규화 후 [-1, 1] 범위의 identity MBE
+        norm_name = f"mbe_ln_id_norm_T{timesteps}_N{num_basis}.pth"
+        gamma_name = f"mbe_ln_id_gamma_T{timesteps}_N{num_basis}.pth"
+        
         self.mult_norm = _make_id_multiplier(
-            model_path=os.path.join(MODEL_DIR, self.MODEL_NORM),
+            model_path=os.path.join(MODEL_DIR, norm_name),
             x_range=(-1.0, 1.0),
             tag='MBEId-norm',
             num_basis=num_basis, timesteps=timesteps,
-            num_epochs=epochs, lr=lr, tv_weight=tv_weight
+            num_epochs=epochs, lr=lr, tv_weight=tv_weight,
+            l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
         )
         self.mult_gamma = _make_id_multiplier(
-            model_path=os.path.join(MODEL_DIR, self.MODEL_GAMMA),
+            model_path=os.path.join(MODEL_DIR, gamma_name),
             x_range=(-1.0, 1.0),
             tag='MBEId-gamma',
             num_basis=num_basis, timesteps=timesteps,
-            num_epochs=epochs, lr=lr, tv_weight=tv_weight
+            num_epochs=epochs, lr=lr, tv_weight=tv_weight,
+            l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
         )
         self.gamma = nn.Parameter(torch.ones(normalized_dim))
         self.beta  = nn.Parameter(torch.zeros(normalized_dim))
@@ -257,23 +263,27 @@ class MBELayerNorm(nn.Module):
 
     def __init__(self, normalized_shape: int, eps: float = 1e-5,
                  num_basis: int = 8, timesteps: int = 16,
-                 epochs: int = 3000, lr: float = 0.005, tv_weight: float = 0.05):
+                 epochs: int = 3000, lr: float = 0.005, tv_weight: float = 0.05,
+                 l1_spike_weight: float = 0.0, target_loss: float = 1e-4, patience: int = 1000):
         super().__init__()
         self.normalized_shape = normalized_shape
         self.eps = eps
 
         self.step1 = MBESquare(
             num_basis=num_basis, timesteps=timesteps, 
-            epochs=epochs, lr=lr, tv_weight=tv_weight
+            epochs=epochs, lr=lr, tv_weight=tv_weight,
+            l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
         )
         self.step2 = MBEInvSqrt(
             num_basis=num_basis, timesteps=timesteps,
-            epochs=epochs, lr=lr, tv_weight=tv_weight
+            epochs=epochs, lr=lr, tv_weight=tv_weight,
+            l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
         )
         self.step3 = MBEFPScaling(
             normalized_dim=normalized_shape,
             num_basis=num_basis, timesteps=timesteps,
-            epochs=epochs, lr=lr, tv_weight=tv_weight
+            epochs=epochs, lr=lr, tv_weight=tv_weight,
+            l1_spike_weight=l1_spike_weight, target_loss=target_loss, patience=patience
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
