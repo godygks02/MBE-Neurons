@@ -289,7 +289,7 @@ def main():
         cdcer = (1 - total_snn_energy / total_ann_energy) * 100
 
         print(f"\n--- GPT-2 Small SNN Evaluation Report ---")
-        print(f"Target SNN PPL (from paper): 23.41")
+        print(f"Target PPL (Baseline ANN PPL): 29.09")
         print(f"Achieved SNN PPL: {snn_ppl:.2f}")
         print(f"\n--- Efficiency Analysis (Per Sequence of {stride} tokens) ---")
         print(f"Avg Firing Rate (eta): {avg_eta*100:.2f}%")

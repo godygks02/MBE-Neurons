@@ -182,28 +182,26 @@ def main():
     
     cdcer = (1 - total_snn_energy / total_ann_energy) * 100
 
-    print(f"\n--- CDCER (Comprehensive Dynamic Compute Efficiency Ratio) ---")
+    print(f"\n--- Efficiency Score ---")
     print(f"ANN Acc: {ann_acc:.2f}%, SNN Acc: {snn_acc:.2f}% (Delta: {ann_acc - snn_acc:.2f}%)")
     print(f"Avg Firing Rate (eta): {avg_eta*100:.2f}%")
     print(f"ANN Total Energy: {total_ann_energy/1e6:.2f} uJ (Non-linear overhead included)")
     print(f"SNN Total Energy: {total_snn_energy/1e6:.2f} uJ (Pre-compute amortized)")
-    print(f"CDCER Score: {cdcer:.2f}%")
+    print(f"Efficiency Score: {cdcer:.2f}%")
     
     # 6. Result Visualization
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.axis('off')
     
-    # Pure Inference Gain (excluding pre-compute)
-    pure_gain = (1 - e_snn_inference / total_ann_energy) * 100
-
     table_data = [
-        ["Metric", "ANN (Baseline)", f"SNN (T={T}, N={N})", "Efficiency Gain (CDCER)"],
+        ["Metric", "ANN (Baseline)", f"SNN (T={T}, N={N})", "Efficiency Gain"],
         ["Accuracy", f"{ann_acc:.2f}%", f"{snn_acc:.2f}%", f"{ann_acc - snn_acc:.2f}% (Drop)"],
         ["Linear Energy", f"{e_ann_linear/1e6:.2f} uJ", f"Included in SOPs", "-"],
         ["Non-Linear Energy", f"{(e_ann_ln+e_ann_gelu+e_ann_softmax)/1e6:.2f} uJ", f"Included in SOPs", "-"],
         ["Pre-compute Cost", "-", f"{e_snn_precompute/1e6:.2f} uJ (Total)", "One-time Setup"],
         ["Total Dynamic Energy", f"{total_ann_energy/1e6:.2f} uJ", f"{total_snn_energy/1e6:.2f} uJ", f"{cdcer:.2f}%"],
-        ["Pure Inference Gain", "-", "-", f"{pure_gain:.2f}% (Excl. Setup)"]
+        ["MAC 연산수", f"{num_weights:,}", "-", "-"],
+        ["sops 연산수", "-", f"{avg_sops:,.1f}", "-"]
     ]
     
     table = ax.table(cellText=table_data, loc='center', cellLoc='center', colWidths=[0.2, 0.25, 0.3, 0.25])
